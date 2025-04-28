@@ -1,0 +1,22 @@
+{
+    "mcpServers": {
+        "filesystem": {
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "~/Desktop/"
+            ],
+            "command": "npx"
+        },
+        "tavily-mcp": {
+            "args": [
+                "-y",
+                "tavily-mcp@0.1.2"
+            ],
+            "command": "npx",
+            "env": {
+                "TAVILY_API_KEY": "<YOUR TAVILY API KEY>"
+            }
+        }
+    }
+}
