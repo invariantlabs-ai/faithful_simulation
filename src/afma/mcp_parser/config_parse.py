@@ -20,31 +20,30 @@ from .models import (
 from .suppressIO import SuppressStd
 from .rebalance_comand_args import rebalance_command_args
 
+def get_client(server_config: SSEServer | StdioServer, timeout: int) -> AsyncContextManager:
+    if isinstance(server_config, SSEServer):
+        return sse_client(
+            url=server_config.url,
+            headers=server_config.headers,
+            # env=server_config.env, #Not supported by MCP yet, but present in vscode
+            timeout=timeout,
+        )
+    else:
+        # handle complex configs
+        command, args = rebalance_command_args(server_config.command, server_config.args)
+        server_params = StdioServerParameters(
+            command=command,
+            args=args,
+            env=server_config.env,
+        )
+        return stdio_client(server_params)
 
 async def check_server(
     server_config: SSEServer | StdioServer, timeout: int, suppress_mcpserver_io: bool
 ) -> tuple[list[Prompt], list[Resource], list[Tool]]:
 
-    def get_client(server_config: SSEServer | StdioServer) -> AsyncContextManager:
-        if isinstance(server_config, SSEServer):
-            return sse_client(
-                url=server_config.url,
-                headers=server_config.headers,
-                # env=server_config.env, #Not supported by MCP yet, but present in vscode
-                timeout=timeout,
-            )
-        else:
-            # handle complex configs
-            command, args = rebalance_command_args(server_config.command, server_config.args)
-            server_params = StdioServerParameters(
-                command=command,
-                args=args,
-                env=server_config.env,
-            )
-            return stdio_client(server_params)
-
     async def _check_server() -> tuple[list[Prompt], list[Resource], list[Tool]]:
-        async with get_client(server_config) as (read, write):
+        async with get_client(server_config, timeout) as (read, write):
             async with ClientSession(read, write) as session:
                 meta = await session.initialize()
                 # for see servers we need to check the announced capabilities
