@@ -38,8 +38,8 @@ afma create-users agent_mcp_configs/claude_desktop_config.json litellm_configs/o
 
 This command:
 - Uses the provided agent configuration and LiteLLM config
-- Generates user simulations with maximum message length of 3
-- Creates up to 10 users per message length
+- Simulates user tasks with maximum tool sequence length of 3
+- Creates up to 10 users per tool sequence length
 - Saves the results to `results/users.json`
 
 ## This Project
