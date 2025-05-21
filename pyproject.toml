@@ -16,3 +16,10 @@ dependencies = [
 
 [project.scripts]
 afma = "afma.cli:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.uv]
+package = true

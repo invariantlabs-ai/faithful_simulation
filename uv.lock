@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 [[package]]
 name = "afma"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "lark-parser", extra = ["regex"] },

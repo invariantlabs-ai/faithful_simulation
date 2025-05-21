@@ -47,7 +47,6 @@ def scan_mcp_command(path: str, timeout: int, show_server_output: bool, output: 
         path=path,
         timeout=timeout,
         suppress_io=not show_server_output,
-        verbose=True,
         output_file=output
     ))
 
@@ -58,10 +57,12 @@ def scan_mcp_command(path: str, timeout: int, show_server_output: bool, output: 
 @click.argument("output", type=click.Path())
 @click.option("--max-permutations", "-m", type=int, default=3,
               help="Maximum length of tool permutations")
+@click.option("--max-users-per-len", type=int, default=None,
+              help="Maximum number of users to generate per permutation length")
 @click.option("--timeout", "-t", type=int, default=10,
               help="Timeout in seconds for server connections")
 def create_users_command(mcp_config_path: str, litellm_config_path: str, output: str, max_permutations: int,
-                        timeout: int):
+                        timeout: int, max_users_per_len: Optional[int]):
     """Create users using CombinatoricUserSet with tools from MCP config.
 
     Connects to MCP servers defined in the config file, retrieves available tools,
@@ -74,19 +75,20 @@ def create_users_command(mcp_config_path: str, litellm_config_path: str, output:
 
         try:
             # Get tools from MCP config file using the utility function
-            all_tools = await get_tools_from_mcp_config(mcp_config_path, timeout, verbose=True)
+            all_tools = await get_tools_from_mcp_config(mcp_config_path, timeout)
 
             # Create user set
             user_set = CombinatoricUserSet(
                 tools_info=all_tools,
                 llm_config=llm_config,
-                max_permutation_length=max_permutations
+                max_permutation_length=max_permutations,
+                max_users_per_len=max_users_per_len
             )
 
             # Generate users
             logger.info("Generating users...")
             users = await user_set.generate_users()
-            logger.info(f"Generated {len(users)} users")
+            logger.success(f"Generated {len(users)} users")
 
             # Save users
             os.makedirs(Path(output).parent, exist_ok=True)
@@ -96,7 +98,7 @@ def create_users_command(mcp_config_path: str, litellm_config_path: str, output:
             } for user in users]
             with open(output, 'w') as f:
                 json.dump(users_results, f, indent=2)
-            logger.info(f"Saved user histories to {output}")
+            logger.success(f"Saved user histories to {output}")
 
         except FileNotFoundError:
             # Error already logged by get_tools_from_mcp_config if it's the mcp_config_path
@@ -117,12 +119,14 @@ def create_users_command(mcp_config_path: str, litellm_config_path: str, output:
 @click.argument("output", type=click.Path())
 @click.option("--max-permutations", "-m", type=int, default=3,
               help="Maximum length of tool permutations")
+@click.option("--max-users-per-len", type=int, default=None,
+              help="Maximum number of users to generate per permutation length")
 @click.option("--max-turns", "-t", type=int, default=10,
               help="Maximum number of conversation turns")
 @click.option("--connect-timeout", type=int, default=10,
               help="Timeout in seconds for server connections during tool retrieval")
 def simulate_chats_command(mcp_config_path: str, litellm_config_path: str, output: str,
-                           max_permutations: int, max_turns: int, connect_timeout: int):
+                           max_permutations: int, max_turns: int, connect_timeout: int, max_users_per_len: Optional[int]):
     """Create users and simulate chats with an agent.
 
     Generates users based on permutations of tools and runs conversations with an agent.
@@ -155,12 +159,13 @@ def simulate_chats_command(mcp_config_path: str, litellm_config_path: str, outpu
         user_set = CombinatoricUserSet(
             tools_info=all_tools,
             llm_config=llm_config,
-            max_permutation_length=max_permutations
+            max_permutation_length=max_permutations,
+            max_users_per_len=max_users_per_len
         )
 
         logger.info("Generating users for simulation...")
         users = await user_set.generate_users()
-        logger.info(f"Generated {len(users)} users for simulation")
+        logger.success(f"Generated {len(users)} users for simulation")
 
         if not users:
             logger.warning("No users were generated. Skipping chat simulations.")

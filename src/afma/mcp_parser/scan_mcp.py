@@ -35,14 +35,13 @@ def format_schema(schema: dict[str, Any]) -> str:
         return str(schema)
 
 
-async def scan_mcp_file(path: str, timeout: int = 10, suppress_io: bool = True, verbose: bool = True, output_file: Optional[str] = None) -> None:
+async def scan_mcp_file(path: str, timeout: int = 10, suppress_io: bool = True, output_file: Optional[str] = None) -> None:
     """Scan an MCP config file and print tools, resources and prompts
 
     Args:
         path: Path to the MCP config file
         timeout: Timeout in seconds for server connections
         suppress_io: Whether to suppress server IO
-        verbose: Whether to show verbose output
         output_file: Optional path to save extracted entities as JSON
     """
     console = Console()
@@ -59,8 +58,7 @@ async def scan_mcp_file(path: str, timeout: int = 10, suppress_io: bool = True, 
         console.print(format_path_line(path, status))
         return
 
-    if verbose:
-        console.print(format_path_line(path, status))
+    console.print(format_path_line(path, status))
 
     # Dictionary to store entities per server
     all_entities: dict[str, Tuple[list[Prompt], list[Resource], list[Tool]]] = {}
@@ -68,8 +66,7 @@ async def scan_mcp_file(path: str, timeout: int = 10, suppress_io: bool = True, 
     # Scan all servers
     for server_name, server_config in servers.items():
         try:
-            if verbose:
-                console.print(f"Scanning server [cyan]{server_name}[/cyan]...")
+            console.print(f"Scanning server [cyan]{server_name}[/cyan]...")
 
             prompts, resources, tools = await check_server_with_timeout(
                 server_config, timeout, suppress_io
@@ -77,8 +74,7 @@ async def scan_mcp_file(path: str, timeout: int = 10, suppress_io: bool = True, 
 
             all_entities[server_name] = (prompts, resources, tools)
 
-            if verbose:
-                console.print(f"  ✓ Found: [green]{len(prompts)}[/green] prompts, [green]{len(resources)}[/green] resources, [green]{len(tools)}[/green] tools")
+            console.print(f"  ✓ Found: [green]{len(prompts)}[/green] prompts, [green]{len(resources)}[/green] resources, [green]{len(tools)}[/green] tools")
 
         except asyncio.TimeoutError:
             console.print(f"  ✗ [red]Timed out[/red] connecting to server [cyan]{server_name}[/cyan]")
@@ -104,8 +100,7 @@ async def scan_mcp_file(path: str, timeout: int = 10, suppress_io: bool = True, 
             with open(output_file, 'w') as f:
                 json.dump(json_data, f, indent=2)
 
-            if verbose:
-                console.print(f"Entities saved to: [green]{output_file}[/green]")
+            console.print(f"Entities saved to: [green]{output_file}[/green]")
         except Exception as e:
             console.print(f"[red]Error saving to {output_file}: {str(e)}[/red]")
 
