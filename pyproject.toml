@@ -12,6 +12,8 @@ dependencies = [
     "pyjson5>=1.6.8",
     "rich>=13.7.0",
     "click>=8.1.7",
+    "streamlit>=1.28.0",
+    "pandas>=2.0.0",
 ]
 
 [project.scripts]

@@ -1,0 +1,36 @@
+{
+    "mcpServers": {
+        "filesystem": {
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-filesystem",
+                "~/Desktop/"
+            ],
+            "command": "npx"
+        },
+        "github": {
+            "args": [
+                "run",
+                "-i",
+                "--rm",
+                "-e",
+                "GITHUB_PERSONAL_ACCESS_TOKEN",
+                "ghcr.io/github/github-mcp-server"
+            ],
+            "command": "docker",
+            "env": {
+                "GITHUB_PERSONAL_ACCESS_TOKEN": "git_token"
+            }
+        },
+        "tavily": {
+            "args": [
+                "-y",
+                "tavily-mcp@0.2.1"
+            ],
+            "command": "npx",
+            "env": {
+                "TAVILY_API_KEY": "tvly-1234567890"
+            }
+        }
+    }
+}

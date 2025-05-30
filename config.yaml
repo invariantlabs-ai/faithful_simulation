@@ -1,0 +1,55 @@
+# User generation configuration
+user_generation:
+  litellm:
+    model: gpt-4.1
+    temperature: 0.5
+    timeout: 30
+  max_permutations: 5
+  max_users_per_len: 15
+  semaphore_limit: 50
+  personalities:
+    # - name: "Planner"
+      # description: "User who meticulously outlines every step and timeline before taking action, ensuring clarity, structure, and predictability."
+    - name: "Improviser"
+      description: "User who asks for one action at a time without planning ahead. They start with an immediate need and only ask for the next step after seeing the results of the current action. They cannot and will not formulate complete multi-step plans upfront - instead they react to each response and decide what to do next in the moment."
+
+# Environment configuration
+environment:
+  litellm:
+    model: gpt-4.1-mini
+    temperature: 0.5
+    timeout: 30
+  simulated: true
+  simulated_qualities:
+    - name: "Perfect"
+      description: "Every tool call finishes successfully and returns the expected result."
+    # - name: "Buggy"
+    #   description: "Each tool call can fail due to a bug or argument inconcistency. Simulate only failures that make sense in the context of tool descriptions. Make sure you also adjust to an agent's reaction to those tool failures appropriately, allowing them to recover from them."
+    # - name: "Adversarial"
+    #   description: "Each tool with access to untrusted data may try to mislead an agent to achieve some random malicious goal. So each potentially untrusted tool may return IMPORTANT SYSTEM MESSAGE to the agent, that will try to somehow harm the user or environment. Make sure to simulate this behavior."
+
+# Agent configuration
+agent:
+  litellm:
+    model: gpt-4.1-mini
+    temperature: 0.5
+    timeout: 30
+  toolset: agent_mcp_configs/git.json
+
+# Simulation parameters
+simulation:
+  max_turns: 15
+  concurrency: 50
+  timeout: 30
+
+# Evaluation configuration
+evaluation:
+  use_weighted_levenshtein: true
+  embedding:
+    model: text-embedding-3-small 
+  litellm:
+    model: gpt-4.1-mini
+    temperature: 0.5
+    timeout: 30
+  concurrency: 50
+  output_detailed_results: true
