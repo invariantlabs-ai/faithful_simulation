@@ -264,6 +264,155 @@ class WeightedLevenshteinMetric(EvaluationMetric):
         self._embedding_cache.clear()
         self._similarity_cache.clear()
 
+    async def get_optimal_alignment(self, seq1: List[str], seq2: List[str]) -> Dict[str, Any]:
+        """
+        Get the optimal alignment between two tool sequences.
+        
+        Returns:
+            Dictionary containing:
+            - distance: The weighted Levenshtein distance
+            - alignment: List of tuples representing the alignment
+            - operations: List of operations (match, substitute, insert, delete)
+        """
+        if not seq1 and not seq2:
+            return {
+                "distance": 0.0,
+                "alignment": [],
+                "operations": []
+            }
+        
+        if not seq1 or not seq2:
+            # Handle empty sequences
+            if not seq1:
+                operations = [("insert", None, tool) for tool in seq2]
+                alignment = [(None, tool) for tool in seq2]
+            else:
+                operations = [("delete", tool, None) for tool in seq1]
+                alignment = [(tool, None) for tool in seq1]
+            
+            return {
+                "distance": float(max(len(seq1), len(seq2))),
+                "alignment": alignment,
+                "operations": operations
+            }
+        
+        len1, len2 = len(seq1), len(seq2)
+        
+        # Create matrices to store distances and operation choices
+        dp = [[0.0] * (len2 + 1) for _ in range(len1 + 1)]
+        operations_matrix = [[None] * (len2 + 1) for _ in range(len1 + 1)]
+        
+        # Initialize base cases
+        for i in range(len1 + 1):
+            dp[i][0] = float(i)
+            if i > 0:
+                operations_matrix[i][0] = "delete"
+        for j in range(len2 + 1):
+            dp[0][j] = float(j)
+            if j > 0:
+                operations_matrix[0][j] = "insert"
+        
+        # Fill the matrix
+        for i in range(1, len1 + 1):
+            for j in range(1, len2 + 1):
+                if seq1[i-1] == seq2[j-1]:
+                    dp[i][j] = dp[i-1][j-1]  # No operation needed
+                    operations_matrix[i][j] = "match"
+                else:
+                    # Calculate semantic similarity for substitution cost
+                    similarity = await self._get_tool_similarity(seq1[i-1], seq2[j-1])
+                    substitution_cost = 1.0 - similarity
+                    
+                    deletion_cost = dp[i-1][j] + 1.0
+                    insertion_cost = dp[i][j-1] + 1.0
+                    substitution_total_cost = dp[i-1][j-1] + substitution_cost
+                    
+                    min_cost = min(deletion_cost, insertion_cost, substitution_total_cost)
+                    
+                    if min_cost == deletion_cost:
+                        dp[i][j] = deletion_cost
+                        operations_matrix[i][j] = "delete"
+                    elif min_cost == insertion_cost:
+                        dp[i][j] = insertion_cost
+                        operations_matrix[i][j] = "insert"
+                    else:
+                        dp[i][j] = substitution_total_cost
+                        operations_matrix[i][j] = "substitute"
+        
+        # Backtrack to get the alignment
+        alignment = []
+        operations = []
+        i, j = len1, len2
+        
+        while i > 0 or j > 0:
+            if i > 0 and j > 0:
+                operation = operations_matrix[i][j]
+                if operation == "match":
+                    alignment.append((seq1[i-1], seq2[j-1]))
+                    operations.append(("match", seq1[i-1], seq2[j-1]))
+                    i -= 1
+                    j -= 1
+                elif operation == "substitute":
+                    alignment.append((seq1[i-1], seq2[j-1]))
+                    operations.append(("substitute", seq1[i-1], seq2[j-1]))
+                    i -= 1
+                    j -= 1
+                elif operation == "delete":
+                    alignment.append((seq1[i-1], None))
+                    operations.append(("delete", seq1[i-1], None))
+                    i -= 1
+                elif operation == "insert":
+                    alignment.append((None, seq2[j-1]))
+                    operations.append(("insert", None, seq2[j-1]))
+                    j -= 1
+            elif i > 0:
+                alignment.append((seq1[i-1], None))
+                operations.append(("delete", seq1[i-1], None))
+                i -= 1
+            else:
+                alignment.append((None, seq2[j-1]))
+                operations.append(("insert", None, seq2[j-1]))
+                j -= 1
+        
+        # Reverse to get correct order
+        alignment.reverse()
+        operations.reverse()
+        
+        return {
+            "distance": dp[len1][len2],
+            "alignment": alignment,
+            "operations": operations
+        }
+
+    async def align_multiple_sequences(self, reference_sequence: List[str], sequences: List[List[str]]) -> Dict[str, Any]:
+        """
+        Align multiple tool sequences against a reference (ground truth) sequence.
+        
+        Args:
+            reference_sequence: The expected/ground truth tool sequence
+            sequences: List of actual tool sequences to align against the reference
+            
+        Returns:
+            Dictionary containing alignment information for all sequences
+        """
+        if not sequences:
+            return {"alignments": [], "reference_sequence": reference_sequence}
+        
+        if not reference_sequence:
+            # If no reference sequence, treat first sequence as reference for compatibility
+            reference_sequence = sequences[0] if sequences else []
+        
+        alignments = []
+        
+        for seq in sequences:
+            alignment_info = await self.get_optimal_alignment(reference_sequence, seq)
+            alignments.append(alignment_info)
+        
+        return {
+            "alignments": alignments,
+            "reference_sequence": reference_sequence
+        }
+
 
 class LLMJudgeMetric(EvaluationMetric):
     """LLM-as-a-judge metric that evaluates goal achievement."""

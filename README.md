@@ -96,6 +96,8 @@ To enable the comprehensive evaluation, we plan to follow the approach in the fi
 24. [Interactive Debugging and Steering of Multi-Agent AI Systems](https://dl.acm.org/doi/pdf/10.1145/3706598.3713581)
 25. [LLM usage distribution across industries](https://www.anthropic.com/news/the-anthropic-economic-index)
 26. [Terminal-Bench](https://www.tbench.ai/about)
+27. [Darwin Gödel Machine:
+Open-Ended Evolution of Self-Improving Agents](https://arxiv.org/pdf/2505.22954)
 
 ## Notes
 Always use uv and pyproject.toml for package and dependencies management.

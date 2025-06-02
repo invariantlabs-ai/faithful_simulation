@@ -8,7 +8,21 @@ import json
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+import networkx as nx
+import matplotlib.pyplot as plt
+import io
+import base64
+from collections import defaultdict, Counter
 from typing import List, Dict, Any
+import os
+import sys
+from pathlib import Path
+
+from afma.alignment_visualization import (
+    create_trace_alignment_graph_base64 as create_trace_alignment_graph
+)
 
 
 @st.cache_data
@@ -81,6 +95,165 @@ def get_similarity_score(conv: Dict[str, Any]) -> tuple[float, str]:
         return similarity, "Basic Levenshtein"
 
 
+# ========== NEW GRAPH IMPLEMENTATION ==========
+
+# All graph implementation functions are now imported from afma.alignment_visualization module
+
+# ========== END NEW GRAPH IMPLEMENTATION ==========
+
+
+def create_trace_heatmap(alignment_data: Dict[str, Any]) -> go.Figure:
+    """Create a heatmap showing tool usage across instances."""
+    alignments = alignment_data["alignments"]
+    reference_sequence = alignment_data["reference_sequence"]
+    
+    if not alignments:
+        fig = go.Figure()
+        fig.add_annotation(
+            text="No alignment data for heatmap",
+            xref="paper", yref="paper",
+            x=0.5, y=0.5, showarrow=False,
+            font=dict(size=16)
+        )
+        return fig
+    
+    # Create matrix: rows = instances, columns = steps
+    max_length = max(len(a["alignment"]) for a in alignments)
+    
+    # Get all unique tools
+    all_tools = set()
+    for alignment in alignments:
+        for ref_tool, instance_tool in alignment["alignment"]:
+            if instance_tool is not None:
+                all_tools.add(instance_tool)
+    
+    all_tools = sorted(list(all_tools))
+    tool_to_idx = {tool: i for i, tool in enumerate(all_tools)}
+    
+    # Create heatmap matrix
+    heatmap_data = []
+    instance_labels = []
+    step_labels = [f"Step {i+1}" for i in range(max_length)]
+    
+    for instance_idx, alignment in enumerate(alignments):
+        instance_labels.append(f"Instance {instance_idx}")
+        row = []
+        
+        for step in range(max_length):
+            if step < len(alignment["alignment"]):
+                ref_tool, instance_tool = alignment["alignment"][step]
+                if instance_tool is not None:
+                    # Tool present at this step
+                    row.append(tool_to_idx[instance_tool])
+                else:
+                    # Tool skipped
+                    row.append(-1)
+            else:
+                # No tool at this step
+                row.append(-2)
+        
+        heatmap_data.append(row)
+    
+    # Create custom colorscale
+    colorscale = ['lightgray', 'white'] + px.colors.qualitative.Set3[:len(all_tools)]
+    
+    fig = go.Figure(data=go.Heatmap(
+        z=heatmap_data,
+        x=step_labels,
+        y=instance_labels,
+        colorscale=colorscale,
+        showscale=False,
+        hovertemplate='Instance: %{y}<br>Step: %{x}<br>Tool: %{customdata}<extra></extra>',
+        customdata=[[all_tools[val] if 0 <= val < len(all_tools) else 'Skipped' if val == -1 else 'None' 
+                    for val in row] for row in heatmap_data]
+    ))
+    
+    # Create a separate legend using annotations with better spacing
+    legend_items = []
+    for i, tool in enumerate(all_tools):
+        # Truncate long tool names for display
+        display_name = tool if len(tool) <= 20 else tool[:17] + "..."
+        legend_items.append(dict(
+            x=1.02,
+            y=0.95 - (i * 0.05),  # Better spacing
+            xref='paper',
+            yref='paper',
+            text=f"<span style='background-color: {colorscale[i + 2] if i + 2 < len(colorscale) else 'lightblue'}; padding: 2px 6px; border-radius: 3px; color: black; font-size: 11px;'>{display_name}</span>",
+            showarrow=False,
+            align="left",
+            font=dict(size=11)
+        ))
+    
+    fig.update_layout(
+        title="Tool Usage Pattern Across Instances",
+        xaxis_title="Execution Steps",
+        yaxis_title="Trace Instances",
+        annotations=legend_items,
+        margin=dict(r=200, t=60, l=80, b=60),
+        height=400 + len(alignments) * 25,
+        plot_bgcolor='white'
+    )
+    
+    return fig
+
+
+def load_files_from_folder(folder_path: str) -> tuple[List[Dict[str, Any]], Dict[str, Any], List[Dict[str, Any]]]:
+    """Load conversation files automatically from a folder by expected names."""
+    conversations = []
+    trace_alignments = {}
+    alignment_summary = []
+    
+    folder = Path(folder_path)
+    if not folder.exists():
+        st.error(f"Folder does not exist: {folder_path}")
+        return conversations, trace_alignments, alignment_summary
+    
+    # Expected file names
+    conversation_files = ["conversations.json", "conversation_data.json", "conversations_data.json"]
+    alignment_files = ["trace_alignments.json", "alignments.json"]
+    summary_files = ["alignment_summary.json", "summary.json", "trace_summary.json"]
+    
+    # Load conversations
+    for filename in conversation_files:
+        filepath = folder / filename
+        if filepath.exists():
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    conversations = json.load(f)
+                st.success(f"✅ Loaded {len(conversations)} conversations from {filename}")
+                break
+            except Exception as e:
+                st.warning(f"⚠️ Error loading {filename}: {e}")
+    else:
+        st.warning(f"📁 No conversation file found in {folder_path}. Looking for: {', '.join(conversation_files)}")
+    
+    # Load trace alignments
+    for filename in alignment_files:
+        filepath = folder / filename
+        if filepath.exists():
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    trace_alignments = json.load(f)
+                st.success(f"✅ Loaded alignments for {len(trace_alignments)} trace sets from {filename}")
+                break
+            except Exception as e:
+                st.warning(f"⚠️ Error loading {filename}: {e}")
+    
+    # Load alignment summary
+    for filename in summary_files:
+        filepath = folder / filename
+        if filepath.exists():
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    alignment_summary = json.load(f)
+                st.success(f"✅ Loaded alignment summary for {len(alignment_summary)} trace sets from {filename}")
+                break
+            except Exception as e:
+                st.warning(f"⚠️ Error loading {filename}: {e}")
+    
+    return conversations, trace_alignments, alignment_summary
+
+
 def main():
     st.set_page_config(
         page_title="Conversation Viewer",
@@ -99,25 +272,110 @@ def main():
     if 'selected_conversation' not in st.session_state:
         st.session_state.selected_conversation = None
     
-    # File upload
-    uploaded_file = st.file_uploader(
-        "Upload a JSON file with conversations",
-        type=['json'],
-        help="Upload a JSON file containing conversation data"
-    )
+    # Data loading options
+    st.subheader("📂 Data Loading")
     
-    # Load data
+    # Add tabs for different loading methods
+    load_tab1, load_tab2 = st.tabs(["📁 Load from Folder", "📎 Upload Files"])
+    
     conversations = []
-    if uploaded_file is not None:
-        try:
-            # Read the uploaded file
-            conversations = json.load(uploaded_file)
-            st.success(f"Loaded {len(conversations)} conversations from uploaded file")
-        except Exception as e:
-            st.error(f"Error loading uploaded file: {e}")
-            return
-    else:        
-        st.warning("No file uploaded. Please upload a JSON file with conversations.")
+    trace_alignments = {}
+    alignment_summary = []
+    
+    with load_tab1:
+        st.markdown("**Load files automatically from a folder**")
+        
+        # Folder path input
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            folder_path = st.text_input(
+                "Folder Path",
+                help="Enter the path to the folder containing conversation data files"
+            )
+        
+        with col2:
+            if st.button("🔄 Reload", type="secondary"):
+                if folder_path:
+                    # Force reload by clearing cache
+                    st.rerun()
+                else:
+                    st.error("Please enter a folder path")
+        
+        # Auto-load files when valid folder path is entered
+        if folder_path and os.path.exists(folder_path):
+            conversations, trace_alignments, alignment_summary = load_files_from_folder(folder_path)
+        
+        # Show detected files
+        if folder_path and os.path.exists(folder_path):
+            st.markdown("**📋 Files in folder:**")
+            folder = Path(folder_path)
+            json_files = list(folder.glob("*.json"))
+            if json_files:
+                for file in sorted(json_files):
+                    file_size = file.stat().st_size
+                    size_str = f"{file_size:,} bytes" if file_size < 1024*1024 else f"{file_size/(1024*1024):.1f} MB"
+                    st.markdown(f"- `{file.name}` ({size_str})")
+            else:
+                st.markdown("- *No JSON files found*")
+        elif folder_path:
+            st.error(f"❌ Folder does not exist: {folder_path}")
+    
+    with load_tab2:
+        st.markdown("**Upload individual files manually**")
+        
+        # File upload
+        uploaded_file = st.file_uploader(
+            "Upload conversations JSON file",
+            type=['json'],
+            help="Upload a JSON file containing conversation data",
+            key="manual_conversations"
+        )
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            alignment_file = st.file_uploader(
+                "Upload trace alignments (optional)",
+                type=['json'],
+                help="Upload trace_alignments.json for trace set visualization",
+                key="manual_alignment_file"
+            )
+        
+        with col2:
+            alignment_summary_file = st.file_uploader(
+                "Upload alignment summary (optional)",
+                type=['json'],
+                help="Upload alignment_summary.json for trace set overview",
+                key="manual_alignment_summary_file"
+            )
+        
+        # Load uploaded files
+        if uploaded_file is not None:
+            try:
+                conversations = json.load(uploaded_file)
+                st.success(f"✅ Loaded {len(conversations)} conversations from uploaded file")
+            except Exception as e:
+                st.error(f"❌ Error loading uploaded file: {e}")
+        
+        if alignment_file is not None:
+            try:
+                trace_alignments = json.load(alignment_file)
+                st.success(f"✅ Loaded alignments for {len(trace_alignments)} trace sets")
+            except Exception as e:
+                st.error(f"❌ Error loading alignment file: {e}")
+        
+        if alignment_summary_file is not None:
+            try:
+                alignment_summary = json.load(alignment_summary_file)
+                st.success(f"✅ Loaded alignment summary for {len(alignment_summary)} trace sets")
+            except Exception as e:
+                st.error(f"❌ Error loading alignment summary file: {e}")
+    
+    # Show loading status
+    if not conversations and not trace_alignments and not alignment_summary:
+        st.info("💡 **Tip:** Use the folder loading tab to automatically detect and load files, or upload them manually in the upload tab.")
+        return
     
     # Sidebar filters
     st.sidebar.header("Filters")
@@ -148,7 +406,7 @@ def main():
     st.sidebar.markdown(f"**Filtered: {len(filtered_conversations)} conversations**")
     
     # Main content tabs
-    tab1, tab2, tab3 = st.tabs(["📊 Overview", "🔍 Browse Conversations", "📈 Similarity Analysis"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🔍 Browse Conversations", "📈 Similarity Analysis", "🧬 Trace Alignments"])
     
     with tab1:
         st.header("Dataset Overview")
@@ -471,6 +729,187 @@ def main():
                 
                 st.markdown("**Environment Personality:**")
                 st.write(conv['environment_personality'])
+
+
+    with tab4:
+        st.header("Trace Alignments")
+        
+        if not trace_alignments and not alignment_summary:
+            st.warning("No trace alignment data available. Upload trace_alignments.json and alignment_summary.json to view trace set visualizations.")
+            return
+        
+        if not conversations:
+            st.warning("No conversations loaded. Please upload conversations to view trace alignments.")
+            return
+        
+        # Show overview if we have alignment summary
+        if alignment_summary:
+            st.subheader("📊 Trace Set Overview")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Total Trace Sets", len(alignment_summary))
+                avg_instantiations = sum(ts["instantiation_count"] for ts in alignment_summary) / len(alignment_summary) if alignment_summary else 0
+                st.metric("Avg Instantiations", f"{avg_instantiations:.1f}")
+            
+            with col2:
+                avg_distance = sum(ts["avg_distance"] for ts in alignment_summary) / len(alignment_summary) if alignment_summary else 0
+                max_distance = max(ts["max_distance"] for ts in alignment_summary) if alignment_summary else 0
+                st.metric("Avg Alignment Distance", f"{avg_distance:.3f}")
+                st.metric("Max Alignment Distance", f"{max_distance:.3f}")
+            
+            with col3:
+                # Calculate variety metrics
+                unique_personalities = len(set(ts["user_personality"] for ts in alignment_summary))
+                unique_env_personalities = len(set(ts["environment_personality"] for ts in alignment_summary))
+                st.metric("User Personalities", unique_personalities)
+                st.metric("Env Personalities", unique_env_personalities)
+            
+            # Trace set selector
+            st.subheader("🔍 Explore Trace Sets")
+            
+            if alignment_summary:
+                # Sort by average distance (most variable first)
+                sorted_trace_sets = sorted(alignment_summary, key=lambda x: x["avg_distance"], reverse=True)
+                
+                trace_set_index = st.selectbox(
+                    "Select Trace Set",
+                    range(len(sorted_trace_sets)),
+                    format_func=lambda x: f"Set {x+1}: {sorted_trace_sets[x]['user_goal'][:50]}... (Avg Dist: {sorted_trace_sets[x]['avg_distance']:.3f}, {sorted_trace_sets[x]['instantiation_count']} instances)",
+                    key="trace_set_selector"
+                )
+                
+                selected_trace_set = sorted_trace_sets[trace_set_index]
+                trace_set_id = selected_trace_set["trace_set_id"]
+                
+                # Display trace set details
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    st.subheader("🧬 Trace Alignment Flow Visualization")
+                    
+                    # Get alignment data for this trace set
+                    if trace_set_id in trace_alignments:
+                        alignment_data = trace_alignments[trace_set_id]
+                        
+                        # Visualization type selector
+                        viz_type = st.radio(
+                            "Choose visualization type:",
+                            ["Network Graph", "Tool Usage Heatmap"],
+                            horizontal=True
+                        )
+                        
+                        # Create and display the selected visualization
+                        if viz_type == "Network Graph":
+                            img_base64 = create_trace_alignment_graph(alignment_data)
+                            st.image(f"data:image/png;base64,{img_base64}", use_column_width=True)
+                            
+                            st.markdown("**Alignment Graph Visualization Legend:**")
+                            st.markdown("- **Grey nodes**: START and END nodes (sequence boundaries)")
+                            st.markdown("- **Blue nodes**: Reference sequence tools")
+                            st.markdown("- **Red nodes**: Sequence variations (substitutions/insertions)")
+                            st.markdown("- **Blue edges**: Reference backbone and start/end connections to reference nodes")
+                            st.markdown("- **Red edges**: Sequence variations and start/end connections to variation nodes")
+                            st.markdown("- **Edge thickness**: Number of traces using that path")
+                            st.markdown("- **Node labels**: Tool names (simplified)")
+                            
+                        else:  # Tool Usage Heatmap
+                            fig = create_trace_heatmap(alignment_data)
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            st.markdown("**Tool Usage Heatmap Legend:**")
+                            st.markdown("- **Rows**: Different trace instances")
+                            st.markdown("- **Columns**: Execution steps")
+                            st.markdown("- **Colors**: Different tools (legend on right)")
+                            st.markdown("- **Gray**: Skipped step, **White**: No tool at step")
+                            st.markdown("- **Hover**: Instance, step, and tool details")
+                        
+                        # Show some basic stats below the graph
+                        alignments = alignment_data["alignments"]
+                        reference_sequence = alignment_data["reference_sequence"]
+                        
+                        # Expandable detailed operations view
+                        with st.expander("📋 Detailed Alignment Operations", expanded=False):
+                            st.markdown("**Reference Sequence:**")
+                            reference_display = " → ".join(reference_sequence) if reference_sequence else "(empty)"
+                            st.code(reference_display)
+                            
+                            for i, alignment in enumerate(alignments):
+                                st.markdown(f"**Instance {i} Operations (Distance: {alignment['distance']:.3f}):**")
+                                operations = alignment["operations"]
+                                for j, (op_type, tool1, tool2) in enumerate(operations):
+                                    if op_type == "match":
+                                        st.markdown(f"  ✅ **Step {j+1}:** Match `{tool1}`")
+                                    elif op_type == "substitute":
+                                        st.markdown(f"  🔄 **Step {j+1}:** Substitute `{tool1}` → `{tool2}`")
+                                    elif op_type == "delete":
+                                        st.markdown(f"  ❌ **Step {j+1}:** Delete `{tool1}`")
+                                    elif op_type == "insert":
+                                        st.markdown(f"  ➕ **Step {j+1}:** Insert `{tool2}`")
+                                st.markdown("---")
+                    else:
+                        st.warning(f"No alignment data found for trace set {trace_set_id}")
+                
+                with col2:
+                    st.subheader("📝 Trace Set Metadata")
+                    
+                    st.markdown("**User Goal:**")
+                    st.write(selected_trace_set["user_goal"])
+                    
+                    st.markdown("**Expected Tool Sequence:**")
+                    for tool in selected_trace_set["expected_tools"]:
+                        st.code(tool)
+                    
+                    st.markdown("**Personalities:**")
+                    st.write(f"User: {selected_trace_set['user_personality']}")
+                    st.write(f"Environment: {selected_trace_set['environment_personality']}")
+                    
+                    st.markdown("**Statistics:**")
+                    st.metric("Instantiations", selected_trace_set["instantiation_count"])
+                    st.metric("Avg Distance", f"{selected_trace_set['avg_distance']:.3f}")
+                    st.metric("Max Distance", f"{selected_trace_set['max_distance']:.3f}")
+                    st.metric("Min Distance", f"{selected_trace_set['min_distance']:.3f}")
+                    
+                    # Show individual conversations
+                    st.markdown("**View Individual Conversations:**")
+                    conversation_ids = selected_trace_set.get("conversation_ids", [])
+                    for i, conv_id in enumerate(conversation_ids):
+                        if conv_id < len(conversations):
+                            conv = conversations[conv_id]
+                            used_tools_display = " → ".join(conv["used_tools"]) if conv["used_tools"] else "(no tools)"
+                            if st.button(f"Instance {i}: {used_tools_display}", key=f"view_conv_{conv_id}"):
+                                st.session_state.selected_conversation = conv
+                                st.session_state.show_conversation_details = True
+        
+        # Show conversation details if selected from trace alignment view
+        if st.session_state.show_conversation_details and st.session_state.selected_conversation:
+            st.markdown("---")
+            st.subheader("📖 Selected Conversation Details")
+            
+            if st.button("❌ Close", key="close_details_trace", help="Close conversation details"):
+                st.session_state.show_conversation_details = False
+                st.session_state.selected_conversation = None
+            
+            conv = st.session_state.selected_conversation
+            
+            # Display basic info
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.markdown("**User Goal:**")
+                st.write(conv['user_goal'])
+                
+                st.markdown("**Tool Sequence:**")
+                used_tools_display = " → ".join(conv["used_tools"]) if conv["used_tools"] else "(no tools used)"
+                st.code(used_tools_display)
+            
+            with col2:
+                st.markdown("**Metadata:**")
+                st.write(f"Trace Set: {conv.get('trace_set_id', 'N/A')}")
+                st.write(f"Instance: {conv.get('instantiation_id', 'N/A')}")
+                st.write(f"User Personality: {conv.get('user_personality', 'N/A')}")
+                st.write(f"Env Personality: {conv.get('environment_personality', 'N/A')}")
 
 
 if __name__ == "__main__":

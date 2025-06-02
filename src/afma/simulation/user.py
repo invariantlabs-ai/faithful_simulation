@@ -121,10 +121,10 @@ class UserSet(ABC):
 
 
 class CombinatoricUserSet(UserSet):
-    def __init__(self, tools_info: list[dict[str, Any]], llm_config: dict[str, Any], max_permutation_length: int = 3, max_users_per_len: Optional[int] = None, semaphore_limit: int = 10, personalities: Optional[list[dict[str, str]]] = None):
+    def __init__(self, tools_info: list[dict[str, Any]], llm_config: dict[str, Any], permutation_lengths: list[int], max_users_per_len: Optional[int] = None, semaphore_limit: int = 10, personalities: Optional[list[dict[str, str]]] = None):
         self.tools_info = tools_info
         self.llm_config = llm_config
-        self.max_permutation_length = max_permutation_length
+        self.permutation_lengths = permutation_lengths
         self.max_users_per_len = max_users_per_len
         self.semaphore = asyncio.Semaphore(semaphore_limit)
         self.personalities = personalities or []
@@ -132,8 +132,8 @@ class CombinatoricUserSet(UserSet):
     async def generate_users(self) -> list[User]:
         all_tasks = []
         
-        # Generate base permutations
-        for length in range(1, self.max_permutation_length + 1):
+        # Generate base permutations for each specified length
+        for length in self.permutation_lengths:
             all_perms = list(itertools.permutations(self.tools_info, length))
             
             if self.max_users_per_len is not None and len(all_perms) > self.max_users_per_len:
