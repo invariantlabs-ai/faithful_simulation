@@ -6,7 +6,7 @@ user_generation:
     top_p: 0.9
     timeout: 30
   permutation_lengths: [3]
-  max_users_per_len: 10
+  max_users_per_len: 75
   semaphore_limit: 50
   personalities:
     # - name: "Planner"
@@ -37,7 +37,7 @@ agent:
     temperature: 0.5
     top_p: 0.9
     timeout: 30
-  toolset: agent_mcp_configs/git.json
+  toolset: agent_mcp_configs/complex_agent.json
 
 # Simulation parameters
 simulation:
@@ -58,7 +58,7 @@ evaluation:
   embedding:
     model: text-embedding-3-small 
   litellm:
-    model: gpt-4.1-mini
+    model: gpt-4.1-nano
     temperature: 0.0
     top_p: 0.1
     timeout: 30

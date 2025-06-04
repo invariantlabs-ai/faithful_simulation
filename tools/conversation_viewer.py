@@ -89,6 +89,7 @@ def get_similarity_score(conv: Dict[str, Any]) -> tuple[float, str]:
         return conv["tool_subsequence_score"], "Tool Subsequence"
     else:
         # Calculate basic similarity as fallback
+        print(f'Warning: No similarity score found for conversation {conv["conversation_id"]}')
         user_source_tools = [tool.get('name', '') for tool in conv.get('user_source', [])]
         used_tools = conv.get('used_tools', [])
         similarity = similarity_metric(user_source_tools, used_tools)
@@ -100,101 +101,6 @@ def get_similarity_score(conv: Dict[str, Any]) -> tuple[float, str]:
 # All graph implementation functions are now imported from afma.alignment_visualization module
 
 # ========== END NEW GRAPH IMPLEMENTATION ==========
-
-
-def create_trace_heatmap(alignment_data: Dict[str, Any]) -> go.Figure:
-    """Create a heatmap showing tool usage across instances."""
-    alignments = alignment_data["alignments"]
-    reference_sequence = alignment_data["reference_sequence"]
-    
-    if not alignments:
-        fig = go.Figure()
-        fig.add_annotation(
-            text="No alignment data for heatmap",
-            xref="paper", yref="paper",
-            x=0.5, y=0.5, showarrow=False,
-            font=dict(size=16)
-        )
-        return fig
-    
-    # Create matrix: rows = instances, columns = steps
-    max_length = max(len(a["alignment"]) for a in alignments)
-    
-    # Get all unique tools
-    all_tools = set()
-    for alignment in alignments:
-        for ref_tool, instance_tool in alignment["alignment"]:
-            if instance_tool is not None:
-                all_tools.add(instance_tool)
-    
-    all_tools = sorted(list(all_tools))
-    tool_to_idx = {tool: i for i, tool in enumerate(all_tools)}
-    
-    # Create heatmap matrix
-    heatmap_data = []
-    instance_labels = []
-    step_labels = [f"Step {i+1}" for i in range(max_length)]
-    
-    for instance_idx, alignment in enumerate(alignments):
-        instance_labels.append(f"Instance {instance_idx}")
-        row = []
-        
-        for step in range(max_length):
-            if step < len(alignment["alignment"]):
-                ref_tool, instance_tool = alignment["alignment"][step]
-                if instance_tool is not None:
-                    # Tool present at this step
-                    row.append(tool_to_idx[instance_tool])
-                else:
-                    # Tool skipped
-                    row.append(-1)
-            else:
-                # No tool at this step
-                row.append(-2)
-        
-        heatmap_data.append(row)
-    
-    # Create custom colorscale
-    colorscale = ['lightgray', 'white'] + px.colors.qualitative.Set3[:len(all_tools)]
-    
-    fig = go.Figure(data=go.Heatmap(
-        z=heatmap_data,
-        x=step_labels,
-        y=instance_labels,
-        colorscale=colorscale,
-        showscale=False,
-        hovertemplate='Instance: %{y}<br>Step: %{x}<br>Tool: %{customdata}<extra></extra>',
-        customdata=[[all_tools[val] if 0 <= val < len(all_tools) else 'Skipped' if val == -1 else 'None' 
-                    for val in row] for row in heatmap_data]
-    ))
-    
-    # Create a separate legend using annotations with better spacing
-    legend_items = []
-    for i, tool in enumerate(all_tools):
-        # Truncate long tool names for display
-        display_name = tool if len(tool) <= 20 else tool[:17] + "..."
-        legend_items.append(dict(
-            x=1.02,
-            y=0.95 - (i * 0.05),  # Better spacing
-            xref='paper',
-            yref='paper',
-            text=f"<span style='background-color: {colorscale[i + 2] if i + 2 < len(colorscale) else 'lightblue'}; padding: 2px 6px; border-radius: 3px; color: black; font-size: 11px;'>{display_name}</span>",
-            showarrow=False,
-            align="left",
-            font=dict(size=11)
-        ))
-    
-    fig.update_layout(
-        title="Tool Usage Pattern Across Instances",
-        xaxis_title="Execution Steps",
-        yaxis_title="Trace Instances",
-        annotations=legend_items,
-        margin=dict(r=200, t=60, l=80, b=60),
-        height=400 + len(alignments) * 25,
-        plot_bgcolor='white'
-    )
-    
-    return fig
 
 
 def load_files_from_folder(folder_path: str) -> tuple[List[Dict[str, Any]], Dict[str, Any], List[Dict[str, Any]]]:
@@ -793,37 +699,18 @@ def main():
                     if trace_set_id in trace_alignments:
                         alignment_data = trace_alignments[trace_set_id]
                         
-                        # Visualization type selector
-                        viz_type = st.radio(
-                            "Choose visualization type:",
-                            ["Network Graph", "Tool Usage Heatmap"],
-                            horizontal=True
-                        )
+                        # Create and display the network graph visualization
+                        img_base64 = create_trace_alignment_graph(alignment_data)
+                        st.image(f"data:image/png;base64,{img_base64}", use_container_width=True)
                         
-                        # Create and display the selected visualization
-                        if viz_type == "Network Graph":
-                            img_base64 = create_trace_alignment_graph(alignment_data)
-                            st.image(f"data:image/png;base64,{img_base64}", use_column_width=True)
-                            
-                            st.markdown("**Alignment Graph Visualization Legend:**")
-                            st.markdown("- **Grey nodes**: START and END nodes (sequence boundaries)")
-                            st.markdown("- **Blue nodes**: Reference sequence tools")
-                            st.markdown("- **Red nodes**: Sequence variations (substitutions/insertions)")
-                            st.markdown("- **Blue edges**: Reference backbone and start/end connections to reference nodes")
-                            st.markdown("- **Red edges**: Sequence variations and start/end connections to variation nodes")
-                            st.markdown("- **Edge thickness**: Number of traces using that path")
-                            st.markdown("- **Node labels**: Tool names (simplified)")
-                            
-                        else:  # Tool Usage Heatmap
-                            fig = create_trace_heatmap(alignment_data)
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            st.markdown("**Tool Usage Heatmap Legend:**")
-                            st.markdown("- **Rows**: Different trace instances")
-                            st.markdown("- **Columns**: Execution steps")
-                            st.markdown("- **Colors**: Different tools (legend on right)")
-                            st.markdown("- **Gray**: Skipped step, **White**: No tool at step")
-                            st.markdown("- **Hover**: Instance, step, and tool details")
+                        st.markdown("**Alignment Graph Visualization Legend:**")
+                        st.markdown("- **Grey nodes**: START and END nodes (sequence boundaries)")
+                        st.markdown("- **Blue nodes**: Reference sequence tools")
+                        st.markdown("- **Red nodes**: Sequence variations (substitutions/insertions)")
+                        st.markdown("- **Blue edges**: Reference backbone and start/end connections to reference nodes")
+                        st.markdown("- **Red edges**: Sequence variations and start/end connections to variation nodes")
+                        st.markdown("- **Edge thickness**: Number of traces using that path")
+                        st.markdown("- **Node labels**: Tool names (simplified)")
                         
                         # Show some basic stats below the graph
                         alignments = alignment_data["alignments"]
@@ -893,23 +780,102 @@ def main():
             
             conv = st.session_state.selected_conversation
             
-            # Display basic info
-            col1, col2 = st.columns([3, 1])
+            # Display conversation details in two columns (same as Browse Conversations tab)
+            col1, col2 = st.columns([2, 1])
             
             with col1:
+                # User goal
                 st.markdown("**User Goal:**")
                 st.write(conv['user_goal'])
                 
-                st.markdown("**Tool Sequence:**")
-                used_tools_display = " → ".join(conv["used_tools"]) if conv["used_tools"] else "(no tools used)"
-                st.code(used_tools_display)
+                # History - Full conversation display like in Browse Conversations tab
+                st.markdown("**Conversation History:**")
+                for i, message in enumerate(conv.get('history', [])):
+                    role = message.get('role', 'unknown')
+                    content = message.get('content', '')
+                    tool_calls = message.get('tool_calls', [])
+                    tool_call_id = message.get('tool_call_id', '')
+                    
+                    if role == 'system':
+                        # Skip system messages
+                        continue
+                    elif role == 'user':
+                        st.chat_message("user").write(content)
+                    elif role == 'assistant':
+                        with st.chat_message("assistant"):
+                            if content:
+                                st.write(content)
+                            
+                            # Display tool calls if present
+                            if tool_calls:
+                                st.markdown("**🔧 Tool Calls:**")
+                                for tool_call in tool_calls:
+                                    tool_name = tool_call.get('function', {}).get('name', 'unknown')
+                                    tool_args = tool_call.get('function', {}).get('arguments', '{}')
+                                    tool_id = tool_call.get('id', 'unknown')
+                                    
+                                    # Try to format JSON arguments nicely
+                                    try:
+                                        parsed_args = json.loads(tool_args)
+                                        formatted_args = json.dumps(parsed_args, indent=2)
+                                    except:
+                                        formatted_args = tool_args
+                                    
+                                    with st.expander(f"🔧 {tool_name} ({tool_id[:8]}...)", expanded=True):
+                                        st.code(formatted_args, language="json")
+                    elif role == 'tool':
+                        # Tool result - format nicely with indentation
+                        tool_name = message.get('name', 'unknown_tool')
+                        with st.container():
+                            st.markdown(f"**🔧 Tool Result: `{tool_name}`** `{tool_call_id[:8] if tool_call_id else 'unknown'}...`")
+                            
+                            # Format tool result content with proper indentation
+                            if content:
+                                # Split content into lines and add proper indentation
+                                lines = content.split('\n')
+                                formatted_content = ""
+                                for line in lines:
+                                    if line.strip():
+                                        formatted_content += f"    {line}\n"
+                                    else:
+                                        formatted_content += "\n"
+                                
+                                st.code(formatted_content.rstrip(), language="text")
+                            else:
+                                st.code("(No content)", language="text")
+                    else:
+                        st.write(f"**{role.title()}:** {content}")
             
             with col2:
-                st.markdown("**Metadata:**")
-                st.write(f"Trace Set: {conv.get('trace_set_id', 'N/A')}")
-                st.write(f"Instance: {conv.get('instantiation_id', 'N/A')}")
-                st.write(f"User Personality: {conv.get('user_personality', 'N/A')}")
-                st.write(f"Env Personality: {conv.get('environment_personality', 'N/A')}")
+                st.subheader("Metadata")
+                
+                # Tools
+                user_source_tools = [tool.get('name', '') for tool in conv.get('user_source', [])]
+                used_tools = conv.get('used_tools', [])
+                similarity, similarity_type = get_similarity_score(conv)
+                
+                st.markdown("**Available Tools:**")
+                for tool in user_source_tools:
+                    st.code(tool)
+                
+                st.markdown("**Used Tools:**")
+                for tool in used_tools:
+                    st.code(tool)
+                
+                st.metric(f"{similarity_type} Similarity", f"{similarity:.3f}")
+                
+                # Personalities
+                st.markdown("**User Personality:**")
+                st.write(conv['user_personality'])
+                
+                st.markdown("**Environment Personality:**")
+                st.write(conv['environment_personality'])
+                
+                # Additional trace-specific metadata
+                if 'trace_set_id' in conv:
+                    st.markdown("**Trace Information:**")
+                    st.write(f"Trace Set ID: {conv.get('trace_set_id', 'N/A')}")
+                    st.write(f"Instance ID: {conv.get('instantiation_id', 'N/A')}")
 
 
 if __name__ == "__main__":

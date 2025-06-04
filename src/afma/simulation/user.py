@@ -239,14 +239,19 @@ Generate a user goal following this format that uses all {len(perm)} tool(s) in 
             description = tool["description"]
             formatted_string += f"{i+1}. {name}: {description}\n"
 
-            if "inputSchema" in tool and "required" in tool["inputSchema"] and tool["inputSchema"]["required"]:
-                required_params = tool["inputSchema"]["required"]
-                formatted_string += f"   Function parameters:\n"
+            if "inputSchema" in tool and "properties" in tool["inputSchema"]:
                 properties = tool["inputSchema"]["properties"]
-                for param_name in required_params:
-                    param_description = properties[param_name].get("description", None)
-                    if param_description is None:
-                        formatted_string += f"     - {param_name}\n"
-                    else:
-                        formatted_string += f"     - {param_name}: {param_description}\n"
+                required_params = tool["inputSchema"].get("required", [])
+                
+                if properties:
+                    formatted_string += f"   Function parameters:\n"
+                    for param_name, param_info in properties.items():
+                        param_description = param_info.get("description", "")
+                        is_required = param_name in required_params
+                        required_label = " (required)" if is_required else " (optional)"
+                        
+                        if param_description:
+                            formatted_string += f"     - {param_name}{required_label}: {param_description}\n"
+                        else:
+                            formatted_string += f"     - {param_name}{required_label}\n"
         return formatted_string.strip()

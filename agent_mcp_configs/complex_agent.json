@@ -19,7 +19,7 @@
             ],
             "command": "docker",
             "env": {
-                "GITHUB_PERSONAL_ACCESS_TOKEN": "git_token"
+                "GITHUB_PERSONAL_ACCESS_TOKEN": "git-1234567890"
             }
         },
         "tavily": {

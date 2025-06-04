@@ -3,7 +3,7 @@ import asyncio
 from dataclasses import dataclass, asdict
 from loguru import logger
 
-from .metrics import EvaluationMetric, EvaluationResult, LLMJudgeMetric, ToolSubsequenceMetric, WeightedLevenshteinMetric
+from .metrics import EvaluationMetric, EvaluationResult, WeightedLevenshteinMetric
 
 
 @dataclass
@@ -22,38 +22,26 @@ class Evaluator:
     """Main evaluator class that orchestrates evaluation of conversation traces."""
     
     def __init__(self, 
-                 llm_config: Dict[str, Any],
-                 tool_definitions: Optional[Dict[str, Dict[str, Any]]] = None,
-                 embedding_config: Optional[Dict[str, Any]] = None,
-                 use_weighted_levenshtein: bool = False):
+                 tool_definitions: Dict[str, Dict[str, Any]],
+                 embedding_config: Dict[str, Any]):
         """
         Initialize the evaluator.
         
         Args:
-            llm_config: Configuration for LLM-based metrics
-            tool_definitions: Optional tool definitions for semantic similarity
-            embedding_config: Optional embedding configuration for WeightedLevenshteinMetric
-            use_weighted_levenshtein: Whether to include WeightedLevenshteinMetric
+            tool_definitions: Tool definitions for semantic similarity
+            embedding_config: Embedding configuration for WeightedLevenshteinMetric
         """
-        self.llm_config = llm_config
         self.tool_definitions = tool_definitions
         self.embedding_config = embedding_config
         self.metrics: List[EvaluationMetric] = []
         
         # Initialize default metrics
-        # self.add_metric(LLMJudgeMetric(llm_config))
-        self.add_metric(ToolSubsequenceMetric())
-        
-        # Add weighted Levenshtein metric if requested and configured
-        if use_weighted_levenshtein and tool_definitions and embedding_config:
-            self.add_metric(WeightedLevenshteinMetric(
-                tool_definitions=tool_definitions,
-                embedding_config=embedding_config,
-                cache_embeddings=True
-            ))
-            logger.info("Added WeightedLevenshteinMetric to evaluator")
-        elif use_weighted_levenshtein:
-            logger.warning("WeightedLevenshteinMetric requested but tool_definitions or embedding_config not provided")
+        self.add_metric(WeightedLevenshteinMetric(
+            tool_definitions=tool_definitions,
+            embedding_config=embedding_config,
+            cache_embeddings=True
+        ))
+        logger.info("Added WeightedLevenshteinMetric to evaluator")
     
     def add_metric(self, metric: EvaluationMetric) -> None:
         """Add an evaluation metric."""

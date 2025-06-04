@@ -230,7 +230,10 @@ def visualize_alignment_graph_matplotlib(graph: nx.DiGraph, reference: List,
         matplotlib figure
     """
     fig, ax = plt.subplots(figsize=figsize)
-    pos = nx.spring_layout(graph, k=3, iterations=50)
+    try:
+        pos = nx.planar_layout(graph)
+    except:
+        pos = nx.spring_layout(graph, k=3, iterations=50)
     
     # Separate nodes by type
     start_end_nodes = [node for node in graph.nodes() if node in ['START', 'END']]

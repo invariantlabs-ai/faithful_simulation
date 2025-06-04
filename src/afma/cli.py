@@ -268,31 +268,34 @@ def evaluate_command(config_path: str, conversations_path: str, output: Optional
             
             # Check if weighted Levenshtein is requested
             use_weighted_levenshtein = eval_config["use_weighted_levenshtein"]
-            tool_definitions = None
             embedding_config = eval_config["embedding"]
             
+            tool_definitions = None
             if use_weighted_levenshtein:
-                # Need to load tools from MCP config
-                mcp_config_path = config["agent"]["toolset"]
+                # Get tools from MCP config for semantic similarity
+                mcp_config_path = eval_config.get("mcp_config")
                 if mcp_config_path and os.path.exists(mcp_config_path):
-                    timeout = config["simulation"]["timeout"]
                     try:
-                        all_tools = await get_tools_from_mcp_config(mcp_config_path, timeout)
+                        all_tools = await get_tools_from_mcp_config(mcp_config_path, 10)  # 10 second timeout
                         tool_definitions = {tool["name"]: tool for tool in all_tools}
-                        logger.info(f"Loaded {len(tool_definitions)} tool definitions for weighted Levenshtein")
+                        logger.success(f"Loaded {len(tool_definitions)} tool definitions for weighted Levenshtein")
                     except Exception as e:
-                        logger.warning(f"Failed to load tools for weighted Levenshtein: {e}")
+                        logger.warning(f"Failed to load tools from MCP config: {e}")
+                        logger.warning("No MCP config found for weighted Levenshtein, disabling")
                         use_weighted_levenshtein = False
                 else:
                     logger.warning("No MCP config found for weighted Levenshtein, disabling")
                     use_weighted_levenshtein = False
             
-            # Create evaluator with optional weighted Levenshtein support
+            # Only create evaluator if we have the required configurations
+            if not use_weighted_levenshtein or not tool_definitions or not embedding_config:
+                logger.error("Cannot create evaluator: weighted Levenshtein is disabled or missing required configurations")
+                return
+            
+            # Create evaluator with required configurations
             evaluator = Evaluator(
-                llm_config=eval_config["litellm"],
                 tool_definitions=tool_definitions,
-                embedding_config=embedding_config if use_weighted_levenshtein else None,
-                use_weighted_levenshtein=use_weighted_levenshtein
+                embedding_config=embedding_config
             )
             
             logger.info("Starting evaluation...")
@@ -546,36 +549,33 @@ def run_pipeline_command(config_path: str, output_dir: str, skip_simulation: boo
             
             # Check if weighted Levenshtein is requested
             use_weighted_levenshtein = eval_config["use_weighted_levenshtein"]
-            tool_definitions = None
             embedding_config = eval_config["embedding"]
             
+            tool_definitions = None
             if use_weighted_levenshtein:
-                # Get tool definitions for semantic similarity
-                if not skip_simulation:
-                    # Use tools from simulation
-                    tool_definitions = {tool["name"]: tool for tool in all_tools}
-                else:
-                    # Need to load tools from MCP config
-                    mcp_config_path = config["agent"]["toolset"]
-                    if mcp_config_path and os.path.exists(mcp_config_path):
-                        timeout = config["simulation"]["timeout"]
-                        try:
-                            all_tools = await get_tools_from_mcp_config(mcp_config_path, timeout)
-                            tool_definitions = {tool["name"]: tool for tool in all_tools}
-                            logger.info(f"Loaded {len(tool_definitions)} tool definitions for weighted Levenshtein")
-                        except Exception as e:
-                            logger.warning(f"Failed to load tools for weighted Levenshtein: {e}")
-                            use_weighted_levenshtein = False
-                    else:
+                # Get tools from MCP config for semantic similarity
+                mcp_config_path = agent_config["toolset"]
+                if mcp_config_path and os.path.exists(mcp_config_path):
+                    try:
+                        tool_definitions = {tool["name"]: tool for tool in all_tools}
+                        logger.success(f"Using {len(tool_definitions)} tool definitions for weighted Levenshtein")
+                    except Exception as e:
+                        logger.warning(f"Failed to use tools for weighted Levenshtein: {e}")
                         logger.warning("No MCP config found for weighted Levenshtein, disabling")
                         use_weighted_levenshtein = False
+                else:
+                    logger.warning("No MCP config found for weighted Levenshtein, disabling")
+                    use_weighted_levenshtein = False
             
-            # Create evaluator with optional weighted Levenshtein support
+            # Only create evaluator if we have the required configurations
+            if not use_weighted_levenshtein or not tool_definitions or not embedding_config:
+                logger.error("Cannot run evaluation: weighted Levenshtein is disabled or missing required configurations")
+                return
+            
+            # Create evaluator
             evaluator = Evaluator(
-                llm_config=eval_config["litellm"],
                 tool_definitions=tool_definitions,
-                embedding_config=embedding_config,
-                use_weighted_levenshtein=use_weighted_levenshtein
+                embedding_config=embedding_config
             )
             
             logger.info("Starting evaluation...")
@@ -1048,47 +1048,46 @@ def debug_tool_sequence_command(config_path: str, tool_sequence: str, output_dir
                 use_weighted_levenshtein = eval_config["use_weighted_levenshtein"]
                 embedding_config = eval_config["embedding"]
                 
-                tool_definitions_for_eval = None
-                if use_weighted_levenshtein:
-                    tool_definitions_for_eval = tool_definitions
-                
-                # Create evaluator
-                evaluator = Evaluator(
-                    llm_config=eval_config["litellm"],
-                    tool_definitions=tool_definitions_for_eval,
-                    embedding_config=embedding_config,
-                    use_weighted_levenshtein=use_weighted_levenshtein
-                )
-                
-                summary = await evaluator.evaluate_batch(
-                    all_conversations, 
-                    concurrency=eval_config["concurrency"]
-                )
-                
-                # Add all metric scores to conversations for viewer
-                logger.info("Adding metric scores to conversations...")
-                for metric_name, metric_details in summary.metric_details.items():
-                    for detail in metric_details:
-                        conv_id = detail["conversation_id"]
-                        score = detail["score"]
-                        all_conversations[conv_id][f"{metric_name}_score"] = score
-                        
-                        # Also add detailed results if available
-                        if "details" in detail:
-                            all_conversations[conv_id][f"{metric_name}_details"] = detail["details"]
-                
-                # Save updated conversations with all metric scores
-                with open(conversations_path, 'w') as f:
-                    json.dump(all_conversations, f, indent=2)
-                logger.success(f"Updated conversations with all metric scores")
-                
-                # Print evaluation results
-                evaluator.print_summary(summary)
-                
-                # Save evaluation results
-                eval_results_path = os.path.join(output_dir, "evaluation_results.json")
-                evaluator.save_detailed_results(summary, eval_results_path)
-                logger.success(f"Saved evaluation results to {eval_results_path}")
+                # Only proceed if we have the required configurations
+                if not use_weighted_levenshtein or not tool_definitions or not embedding_config:
+                    logger.warning("Cannot run evaluation: weighted Levenshtein is disabled or missing required configurations")
+                    logger.info("Evaluation requires tool_definitions and embedding_config")
+                else:
+                    # Create evaluator
+                    evaluator = Evaluator(
+                        tool_definitions=tool_definitions,
+                        embedding_config=embedding_config
+                    )
+                    
+                    summary = await evaluator.evaluate_batch(
+                        all_conversations, 
+                        concurrency=eval_config["concurrency"]
+                    )
+                    
+                    # Add all metric scores to conversations for viewer
+                    logger.info("Adding metric scores to conversations...")
+                    for metric_name, metric_details in summary.metric_details.items():
+                        for detail in metric_details:
+                            conv_id = detail["conversation_id"]
+                            score = detail["score"]
+                            all_conversations[conv_id][f"{metric_name}_score"] = score
+                            
+                            # Also add detailed results if available
+                            if "details" in detail:
+                                all_conversations[conv_id][f"{metric_name}_details"] = detail["details"]
+                    
+                    # Save updated conversations with all metric scores
+                    with open(conversations_path, 'w') as f:
+                        json.dump(all_conversations, f, indent=2)
+                    logger.success(f"Updated conversations with all metric scores")
+                    
+                    # Print evaluation results
+                    evaluator.print_summary(summary)
+                    
+                    # Save evaluation results
+                    eval_results_path = os.path.join(output_dir, "evaluation_results.json")
+                    evaluator.save_detailed_results(summary, eval_results_path)
+                    logger.success(f"Saved evaluation results to {eval_results_path}")
             
             logger.success(f"Tool sequence testing completed! Results saved in {output_dir}")
             
