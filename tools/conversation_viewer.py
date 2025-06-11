@@ -79,21 +79,27 @@ def similarity_metric(seq1: List[str], seq2: List[str]) -> float:
     return similarity
 
 
-def get_similarity_score(conv: Dict[str, Any]) -> tuple[float, str]:
-    """Get similarity score from conversation data, preferring weighted if available."""
-    # Check for weighted Levenshtein metric score first
-    if "weighted_levenshtein_score" in conv:
-        return conv["weighted_levenshtein_score"], "Weighted Levenshtein"
-    # Check for tool subsequence metric score
-    elif "tool_subsequence_score" in conv:
-        return conv["tool_subsequence_score"], "Tool Subsequence"
-    else:
-        # Calculate basic similarity as fallback
-        print(f'Warning: No similarity score found for conversation {conv["conversation_id"]}')
-        user_source_tools = [tool.get('name', '') for tool in conv.get('user_source', [])]
-        used_tools = conv.get('used_tools', [])
-        similarity = similarity_metric(user_source_tools, used_tools)
-        return similarity, "Basic Levenshtein"
+def get_similarity_score(conv: Dict[str, Any], trace_alignments: Dict[str, Any] = None) -> tuple[float, str]:
+    """Get similarity score from alignment data or calculate as fallback."""
+    # First try to get from trace alignment data
+    if trace_alignments and conv.get("trace_set_id"):
+        trace_set_id = conv["trace_set_id"]
+        instantiation_id = conv.get("instantiation_id", 0)
+        
+        if trace_set_id in trace_alignments:
+            alignment_data = trace_alignments[trace_set_id]
+            alignments = alignment_data.get("alignments", [])
+            
+            # Find the alignment for this specific instantiation
+            if instantiation_id < len(alignments):
+                alignment = alignments[instantiation_id]
+                return alignment.get("similarity", 0.0), "Weighted Levenshtein"
+    
+    # Fallback to basic similarity calculation
+    user_source_tools = [tool.get('name', '') for tool in conv.get('user_source', [])]
+    used_tools = conv.get('used_tools', [])
+    similarity = similarity_metric(user_source_tools, used_tools)
+    return similarity, "Basic Levenshtein"
 
 
 # ========== NEW GRAPH IMPLEMENTATION ==========
@@ -158,6 +164,42 @@ def load_files_from_folder(folder_path: str) -> tuple[List[Dict[str, Any]], Dict
                 st.warning(f"⚠️ Error loading {filename}: {e}")
     
     return conversations, trace_alignments, alignment_summary
+
+
+def analyze_alignment_patterns(trace_alignments: Dict[str, Any]) -> Dict[str, Any]:
+    """Analyze common error patterns from all trace alignments."""
+    if not trace_alignments:
+        return {}
+    
+    # Counters for different types of operations
+    substitutions = Counter()  # (from_tool, to_tool) pairs
+    insertions = Counter()     # inserted tools
+    deletions = Counter()      # deleted tools
+    total_operations = Counter()  # operation types
+    
+    # Process all trace alignments
+    for trace_set_id, alignment_data in trace_alignments.items():
+        alignments = alignment_data.get("alignments", [])
+        
+        for alignment in alignments:
+            operations = alignment.get("operations", [])
+            
+            for op_type, tool1, tool2 in operations:
+                total_operations[op_type] += 1
+                
+                if op_type == "substitute":
+                    substitutions[(tool1, tool2)] += 1
+                elif op_type == "insert":
+                    insertions[tool2] += 1
+                elif op_type == "delete":
+                    deletions[tool1] += 1
+    
+    return {
+        "substitutions": substitutions,
+        "insertions": insertions,
+        "deletions": deletions,
+        "total_operations": total_operations
+    }
 
 
 def main():
@@ -338,7 +380,7 @@ def main():
             if filtered_conversations:
                 similarities = []
                 for conv in filtered_conversations:
-                    similarity, sim_type = get_similarity_score(conv)
+                    similarity, sim_type = get_similarity_score(conv, trace_alignments)
                     similarities.append(similarity)
                     similarity_type = sim_type  # Use the type from the last conversation (they should all be the same)
                 avg_similarity = sum(similarities) / len(similarities)
@@ -346,6 +388,104 @@ def main():
             st.metric("Avg Source Tools", f"{avg_source_tools:.1f}")
             st.metric("Avg Used Tools", f"{avg_used_tools:.1f}")
             st.metric(f"Avg {similarity_type} Similarity", f"{avg_similarity:.3f}")
+        
+        # Error Pattern Analysis
+        if trace_alignments:
+            st.markdown("---")
+            st.header("🔍 Alignment Error Pattern Analysis")
+            
+            # Analyze alignment patterns
+            pattern_analysis = analyze_alignment_patterns(trace_alignments)
+            
+            if pattern_analysis and any(pattern_analysis.values()):
+                # Overall operation statistics
+                total_ops = pattern_analysis["total_operations"]
+                if total_ops:
+                    st.subheader("📊 Operation Type Distribution")
+                    
+                    # Create columns for operation stats
+                    op_col1, op_col2, op_col3, op_col4 = st.columns(4)
+                    
+                    with op_col1:
+                        st.metric("Matches", total_ops.get("match", 0))
+                    with op_col2:
+                        st.metric("Substitutions", total_ops.get("substitute", 0))
+                    with op_col3:
+                        st.metric("Insertions", total_ops.get("insert", 0))
+                    with op_col4:
+                        st.metric("Deletions", total_ops.get("delete", 0))
+                    
+                    # Create a simple bar chart for operation distribution
+                    op_data = {op_type: count for op_type, count in total_ops.items() if op_type != "match"}
+                    if op_data:
+                        st.bar_chart(op_data)
+                
+                # Error pattern details
+                error_col1, error_col2, error_col3 = st.columns(3)
+                
+                with error_col1:
+                    st.subheader("🔄 Most Common Substitutions")
+                    substitutions = pattern_analysis["substitutions"]
+                    if substitutions:
+                        top_substitutions = substitutions.most_common(10)
+                        for (from_tool, to_tool), count in top_substitutions:
+                            st.markdown(f"**{count}x:** `{from_tool}` → `{to_tool}`")
+                    else:
+                        st.markdown("*No substitutions found*")
+                
+                with error_col2:
+                    st.subheader("➕ Most Common Insertions")
+                    insertions = pattern_analysis["insertions"]
+                    if insertions:
+                        top_insertions = insertions.most_common(10)
+                        for tool, count in top_insertions:
+                            st.markdown(f"**{count}x:** `{tool}`")
+                    else:
+                        st.markdown("*No insertions found*")
+                
+                with error_col3:
+                    st.subheader("❌ Most Common Deletions")
+                    deletions = pattern_analysis["deletions"]
+                    if deletions:
+                        top_deletions = deletions.most_common(10)
+                        for tool, count in top_deletions:
+                            st.markdown(f"**{count}x:** `{tool}`")
+                    else:
+                        st.markdown("*No deletions found*")
+                
+                # Summary insights
+                st.subheader("💡 Pattern Insights")
+                insights = []
+                
+                # Most problematic tools (frequently substituted or deleted)
+                problematic_tools = Counter()
+                for (from_tool, to_tool), count in substitutions.items():
+                    problematic_tools[from_tool] += count
+                for tool, count in deletions.items():
+                    problematic_tools[tool] += count
+                
+                if problematic_tools:
+                    most_problematic = problematic_tools.most_common(3)
+                    insights.append(f"**Most problematic tools:** {', '.join([f'`{tool}` ({count} errors)' for tool, count in most_problematic])}")
+                
+                # Most commonly added tools
+                if insertions:
+                    most_added = insertions.most_common(3)
+                    insights.append(f"**Most commonly added tools:** {', '.join([f'`{tool}` ({count}x)' for tool, count in most_added])}")
+                
+                # Error rate
+                total_error_ops = sum(count for op_type, count in total_ops.items() if op_type != "match")
+                total_all_ops = sum(total_ops.values())
+                if total_all_ops > 0:
+                    error_rate = (total_error_ops / total_all_ops) * 100
+                    insights.append(f"**Overall error rate:** {error_rate:.1f}% ({total_error_ops}/{total_all_ops} operations)")
+                
+                for insight in insights:
+                    st.markdown(insight)
+            else:
+                st.info("No alignment error patterns found in the dataset.")
+        else:
+            st.info("💡 Upload trace alignment data to see error pattern analysis.")
     
     with tab2:
         st.header("Browse Conversations")
@@ -357,7 +497,7 @@ def main():
         # Calculate similarities and create sorted list
         conversations_with_scores = []
         for i, conv in enumerate(filtered_conversations):
-            similarity, similarity_type = get_similarity_score(conv)
+            similarity, similarity_type = get_similarity_score(conv, trace_alignments)
             conversations_with_scores.append({
                 'original_index': i,
                 'conversation': conv,
@@ -452,7 +592,7 @@ def main():
             # Tools
             user_source_tools = [tool.get('name', '') for tool in conv.get('user_source', [])]
             used_tools = conv.get('used_tools', [])
-            similarity, similarity_type = get_similarity_score(conv)
+            similarity, similarity_type = get_similarity_score(conv, trace_alignments)
             
             st.markdown("**Available Tools:**")
             for tool in user_source_tools:
@@ -482,7 +622,7 @@ def main():
         similarities = []
         similarity_type = "Basic"
         for i, conv in enumerate(filtered_conversations):
-            similarity, sim_type = get_similarity_score(conv)
+            similarity, sim_type = get_similarity_score(conv, trace_alignments)
             similarity_type = sim_type  # Use the type from conversations
             similarities.append({
                 'similarity': similarity,
@@ -617,7 +757,7 @@ def main():
                 # Tools
                 user_source_tools = [tool.get('name', '') for tool in conv.get('user_source', [])]
                 used_tools = conv.get('used_tools', [])
-                similarity, similarity_type = get_similarity_score(conv)
+                similarity, similarity_type = get_similarity_score(conv, trace_alignments)
                 
                 st.markdown("**Available Tools:**")
                 for tool in user_source_tools:
@@ -660,10 +800,10 @@ def main():
                 st.metric("Avg Instantiations", f"{avg_instantiations:.1f}")
             
             with col2:
-                avg_distance = sum(ts["avg_distance"] for ts in alignment_summary) / len(alignment_summary) if alignment_summary else 0
-                max_distance = max(ts["max_distance"] for ts in alignment_summary) if alignment_summary else 0
-                st.metric("Avg Alignment Distance", f"{avg_distance:.3f}")
-                st.metric("Max Alignment Distance", f"{max_distance:.3f}")
+                avg_similarity = sum(ts["avg_similarity"] for ts in alignment_summary) / len(alignment_summary) if alignment_summary else 0
+                min_similarity = min(ts["min_similarity"] for ts in alignment_summary) if alignment_summary else 0
+                st.metric("Avg Alignment Similarity", f"{avg_similarity:.3f}")
+                st.metric("Min Alignment Similarity", f"{min_similarity:.3f}")
             
             with col3:
                 # Calculate variety metrics
@@ -676,13 +816,13 @@ def main():
             st.subheader("🔍 Explore Trace Sets")
             
             if alignment_summary:
-                # Sort by average distance (most variable first)
-                sorted_trace_sets = sorted(alignment_summary, key=lambda x: x["avg_distance"], reverse=True)
+                # Sort by average similarity (lowest first - most problematic)
+                sorted_trace_sets = sorted(alignment_summary, key=lambda x: x["avg_similarity"])
                 
                 trace_set_index = st.selectbox(
                     "Select Trace Set",
                     range(len(sorted_trace_sets)),
-                    format_func=lambda x: f"Set {x+1}: {sorted_trace_sets[x]['user_goal'][:50]}... (Avg Dist: {sorted_trace_sets[x]['avg_distance']:.3f}, {sorted_trace_sets[x]['instantiation_count']} instances)",
+                    format_func=lambda x: f"Set {x+1}: {sorted_trace_sets[x]['user_goal'][:50]}... (Avg Sim: {sorted_trace_sets[x]['avg_similarity']:.3f}, {sorted_trace_sets[x]['instantiation_count']} instances)",
                     key="trace_set_selector"
                 )
                 
@@ -754,9 +894,9 @@ def main():
                     
                     st.markdown("**Statistics:**")
                     st.metric("Instantiations", selected_trace_set["instantiation_count"])
-                    st.metric("Avg Distance", f"{selected_trace_set['avg_distance']:.3f}")
-                    st.metric("Max Distance", f"{selected_trace_set['max_distance']:.3f}")
-                    st.metric("Min Distance", f"{selected_trace_set['min_distance']:.3f}")
+                    st.metric("Avg Similarity", f"{selected_trace_set['avg_similarity']:.3f}")
+                    st.metric("Max Similarity", f"{selected_trace_set['max_similarity']:.3f}")
+                    st.metric("Min Similarity", f"{selected_trace_set['min_similarity']:.3f}")
                     
                     # Show individual conversations
                     st.markdown("**View Individual Conversations:**")
@@ -852,7 +992,7 @@ def main():
                 # Tools
                 user_source_tools = [tool.get('name', '') for tool in conv.get('user_source', [])]
                 used_tools = conv.get('used_tools', [])
-                similarity, similarity_type = get_similarity_score(conv)
+                similarity, similarity_type = get_similarity_score(conv, trace_alignments)
                 
                 st.markdown("**Available Tools:**")
                 for tool in user_source_tools:

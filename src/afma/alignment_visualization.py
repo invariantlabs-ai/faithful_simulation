@@ -52,13 +52,14 @@ def levenshtein_alignment(ref: List, seq: List) -> Tuple[List, List, int]:
     # Fill DP table
     for i in range(1, m + 1):
         for j in range(1, n + 1):
+            position_bias = 0.0001 * j
             if ref[i-1] == seq[j-1]:
-                dp[i][j] = dp[i-1][j-1]  # Match
+                dp[i][j] = dp[i-1][j-1] + position_bias  # Match gets more expensive later
             else:
                 dp[i][j] = 1 + min(
-                    dp[i-1][j],    # Deletion
-                    dp[i][j-1],    # Insertion
-                    dp[i-1][j-1]   # Substitution
+                    dp[i-1][j],                      # Deletion
+                    dp[i][j-1],     # Insertion (cheaper later)
+                    dp[i-1][j-1]                     # Substitution
                 )
     
     # Backtrack to find alignment
@@ -68,27 +69,49 @@ def levenshtein_alignment(ref: List, seq: List) -> Tuple[List, List, int]:
     
     while i > 0 or j > 0:
         if i > 0 and j > 0 and ref[i-1] == seq[j-1]:
-            # Match
-            aligned_ref.append(ref[i-1])
-            aligned_seq.append(seq[j-1])
-            i -= 1
-            j -= 1
-        elif i > 0 and j > 0 and dp[i][j] == dp[i-1][j-1] + 1:
-            # Substitution
-            aligned_ref.append(ref[i-1])
-            aligned_seq.append(seq[j-1])
-            i -= 1
-            j -= 1
-        elif i > 0 and dp[i][j] == dp[i-1][j] + 1:
-            # Deletion from reference
-            aligned_ref.append(ref[i-1])
-            aligned_seq.append('-')
-            i -= 1
-        elif j > 0 and dp[i][j] == dp[i][j-1] + 1:
-            # Insertion to reference
-            aligned_ref.append('-')
-            aligned_seq.append(seq[j-1])
-            j -= 1
+            # Match - check with position bias
+            position_bias = 0.0001 * j
+            if abs(dp[i][j] - (dp[i-1][j-1] + position_bias)) < 1e-10:
+                aligned_ref.append(ref[i-1])
+                aligned_seq.append(seq[j-1])
+                i -= 1
+                j -= 1
+                continue
+        
+        # Check all possible moves and pick the one that led to current cost
+        candidates = []
+        
+        # Substitution
+        if i > 0 and j > 0:
+            if abs(dp[i][j] - (dp[i-1][j-1] + 1)) < 1e-10:
+                candidates.append(('substitute', i-1, j-1))
+        
+        # Deletion
+        if i > 0:
+            if abs(dp[i][j] - (dp[i-1][j] + 1)) < 1e-10:
+                candidates.append(('delete', i-1, j))
+        
+        # Insertion - check with insertion bias
+        if j > 0:
+            if abs(dp[i][j] - (dp[i][j-1] + 1)) < 1e-10:
+                candidates.append(('insert', i, j-1))
+        
+        # Choose the first valid candidate (preference order matters)
+        if candidates:
+            move, new_i, new_j = candidates[0]
+            if move == 'substitute':
+                aligned_ref.append(ref[i-1])
+                aligned_seq.append(seq[j-1])
+            elif move == 'delete':
+                aligned_ref.append(ref[i-1])
+                aligned_seq.append('-')
+            elif move == 'insert':
+                aligned_ref.append('-')
+                aligned_seq.append(seq[j-1])
+            i, j = new_i, new_j
+        else:
+            # Fallback - shouldn't happen with correct implementation
+            break
     
     # Reverse since we built backwards
     aligned_ref.reverse()
@@ -141,8 +164,8 @@ def create_alignment_graph(reference: List, actual_sequences: List[List]) -> nx.
         edge_weights[edge] = 0  # Initialize with 0, will be incremented by traces that use it
     
     # Step 3: Process each actual sequence
-    first_nodes = set()  # Track first nodes that start node should connect to
-    last_nodes = set()   # Track last nodes that should connect to end node
+    first_node_counts = {}  # Track how many sequences start at each first node
+    last_node_counts = {}   # Track how many sequences end at each last node
     
     for trace_idx, seq in enumerate(actual_sequences):
         ref_aligned, seq_aligned, distance = levenshtein_alignment(reference, seq)
@@ -152,28 +175,36 @@ def create_alignment_graph(reference: List, actual_sequences: List[List]) -> nx.
         first_node_in_trace = None
         last_node_in_trace = None
         
+        # Track reference position separately from alignment position
+        ref_pos = 0
+        
         for align_pos, (ref_val, seq_val) in enumerate(zip(ref_aligned, seq_aligned)):
             current_node = None
             
             if ref_val == seq_val and ref_val != '-':
                 # Match: use reference node
                 current_node = ref_node(ref_val)
+                ref_pos += 1
                 
             elif ref_val == '-':
-                # Insertion: create new sequence node using alignment position
-                current_node = seq_node(seq_val, align_pos)
+                # Insertion: create new sequence node using reference position
+                # For insertions, we use the current reference position (where it would insert)
+                current_node = seq_node(seq_val, ref_pos)
                 if not graph.has_node(current_node):
                     graph.add_node(current_node)
+                # Don't increment ref_pos for insertions
                 
             elif seq_val == '-':
                 # Deletion: skip this alignment position, don't create edges
+                ref_pos += 1
                 continue
                 
             else:
-                # Substitution: create new sequence node using alignment position
-                current_node = seq_node(seq_val, align_pos)
+                # Substitution: create new sequence node using reference position
+                current_node = seq_node(seq_val, ref_pos)
                 if not graph.has_node(current_node):
                     graph.add_node(current_node)
+                ref_pos += 1
             
             # Track first and last nodes in this trace
             if current_node is not None:
@@ -191,22 +222,22 @@ def create_alignment_graph(reference: List, actual_sequences: List[List]) -> nx.
             
             prev_node = current_node
         
-        # Track first and last nodes for start/end connections
+        # Track first and last nodes for start/end connections with counts
         if first_node_in_trace is not None:
-            first_nodes.add(first_node_in_trace)
+            first_node_counts[first_node_in_trace] = first_node_counts.get(first_node_in_trace, 0) + 1
         if last_node_in_trace is not None:
-            last_nodes.add(last_node_in_trace)
+            last_node_counts[last_node_in_trace] = last_node_counts.get(last_node_in_trace, 0) + 1
     
-    # Step 4: Connect start node to first nodes and last nodes to end node
-    for first_node in first_nodes:
+    # Step 4: Connect start node to first nodes and last nodes to end node with correct weights
+    for first_node, count in first_node_counts.items():
         edge = (start_node, first_node)
         graph.add_edge(*edge)
-        edge_weights[edge] = len(actual_sequences)  # All sequences start here
+        edge_weights[edge] = count
     
-    for last_node in last_nodes:
+    for last_node, count in last_node_counts.items():
         edge = (last_node, end_node)
         graph.add_edge(*edge)
-        edge_weights[edge] = len(actual_sequences)  # All sequences end here
+        edge_weights[edge] = count
     
     # Add weights as edge attributes
     for edge, weight in edge_weights.items():
@@ -349,6 +380,119 @@ def visualize_alignment_graph_matplotlib(graph: nx.DiGraph, reference: List,
     return fig
 
 
+def create_alignment_graph_from_prealigned(reference: List, aligned_sequences: List[List[Tuple]]) -> nx.DiGraph:
+    """
+    Create a directed graph from pre-aligned sequences (where alignment is already computed).
+    
+    Args:
+        reference: Reference sequence
+        aligned_sequences: List of aligned sequences, where each aligned sequence is a list of 
+                          (ref_element, seq_element) tuples. None values represent gaps.
+    
+    Returns:
+        NetworkX DiGraph representing the alignments with edge weights
+    """
+    graph = nx.DiGraph()
+    edge_weights = {}  # Track how many traces use each edge
+    
+    # Step 1: Create start and end nodes
+    start_node = "START"
+    end_node = "END"
+    graph.add_node(start_node)
+    graph.add_node(end_node)
+    
+    # Step 2: Create reference backbone nodes
+    ref_nodes = [ref_node(val) for val in reference]
+    for node in ref_nodes:
+        graph.add_node(node)
+    
+    # Connect reference nodes sequentially
+    for i in range(len(ref_nodes) - 1):
+        edge = (ref_nodes[i], ref_nodes[i + 1])
+        graph.add_edge(*edge)
+        edge_weights[edge] = 0  # Initialize with 0, will be incremented by traces that use it
+    
+    # Step 3: Process each pre-aligned sequence
+    first_node_counts = {}  # Track how many sequences start at each first node
+    last_node_counts = {}   # Track how many sequences end at each last node
+    
+    for trace_idx, aligned_seq in enumerate(aligned_sequences):
+        # Track the path through this alignment
+        prev_node = None
+        first_node_in_trace = None
+        last_node_in_trace = None
+        
+        # Track reference position separately from alignment position
+        ref_pos = 0
+        
+        for align_pos, (ref_val, seq_val) in enumerate(aligned_seq):
+            current_node = None
+            
+            if ref_val == seq_val and ref_val is not None:
+                # Match: use reference node
+                current_node = ref_node(ref_val)
+                ref_pos += 1
+                
+            elif ref_val is None:
+                # Insertion: create new sequence node using reference position
+                current_node = seq_node(seq_val, ref_pos)
+                if not graph.has_node(current_node):
+                    graph.add_node(current_node)
+                # Don't increment ref_pos for insertions
+                
+            elif seq_val is None:
+                # Deletion: skip this alignment position, don't create edges
+                ref_pos += 1
+                continue
+                
+            else:
+                # Substitution: create new sequence node using reference position
+                current_node = seq_node(seq_val, ref_pos)
+                if not graph.has_node(current_node):
+                    graph.add_node(current_node)
+                ref_pos += 1
+            
+            # Track first and last nodes in this trace
+            if current_node is not None:
+                if first_node_in_trace is None:
+                    first_node_in_trace = current_node
+                last_node_in_trace = current_node
+            
+            # Add edge from previous node if exists and track weight
+            if prev_node is not None and current_node is not None:
+                edge = (prev_node, current_node)
+                if not graph.has_edge(*edge):
+                    graph.add_edge(*edge)
+                    edge_weights[edge] = 0
+                edge_weights[edge] += 1
+            
+            prev_node = current_node
+        
+        # Track first and last nodes for start/end connections with counts
+        if first_node_in_trace is not None:
+            first_node_counts[first_node_in_trace] = first_node_counts.get(first_node_in_trace, 0) + 1
+        if last_node_in_trace is not None:
+            last_node_counts[last_node_in_trace] = last_node_counts.get(last_node_in_trace, 0) + 1
+    
+    # Step 4: Connect start node to first nodes and last nodes to end node with correct weights
+    for first_node, count in first_node_counts.items():
+        edge = (start_node, first_node)
+        graph.add_edge(*edge)
+        edge_weights[edge] = count
+    
+    for last_node, count in last_node_counts.items():
+        edge = (last_node, end_node)
+        graph.add_edge(*edge)
+        edge_weights[edge] = count
+    
+    # Add weights as edge attributes
+    for edge, weight in edge_weights.items():
+        if graph.has_edge(*edge):
+            graph[edge[0]][edge[1]]['weight'] = weight
+    
+    return graph
+
+
 def create_trace_alignment_graph_base64(alignment_data: Dict[str, Any]) -> str:
     """
     Create an alignment graph visualization for web apps and return it as base64 encoded image.
@@ -378,22 +522,33 @@ def create_trace_alignment_graph_base64(alignment_data: Dict[str, Any]) -> str:
         
         return img_base64
     
-    # Extract actual sequences from alignments
-    actual_sequences = []
-    for alignment in alignments:
-        actual_sequence = []
-        for op_type, tool1, tool2 in alignment["operations"]:
-            if op_type == "match":
-                actual_sequence.append(tool2)  # tool2 is the actual tool used
-            elif op_type == "substitute":
-                actual_sequence.append(tool2)  # substituted tool
-            elif op_type == "insert":
-                actual_sequence.append(tool2)  # inserted tool
-            # skip delete operations (no tool added)
-        actual_sequences.append(actual_sequence)
-    
-    # Create alignment graph
-    graph = create_alignment_graph(reference_sequence, actual_sequences)
+    # Check if we have pre-aligned data (alignment field) or need to extract from operations
+    if "alignment" in alignments[0]:
+        # Use pre-aligned data directly
+        aligned_sequences = []
+        for alignment_entry in alignments:
+            aligned_seq = alignment_entry["alignment"]
+            aligned_sequences.append(aligned_seq)
+        
+        # Create alignment graph from pre-aligned data
+        graph = create_alignment_graph_from_prealigned(reference_sequence, aligned_sequences)
+    else:
+        # Extract actual sequences from operations and compute alignment
+        actual_sequences = []
+        for alignment in alignments:
+            actual_sequence = []
+            for op_type, tool1, tool2 in alignment["operations"]:
+                if op_type == "match":
+                    actual_sequence.append(tool2)  # tool2 is the actual tool used
+                elif op_type == "substitute":
+                    actual_sequence.append(tool2)  # substituted tool
+                elif op_type == "insert":
+                    actual_sequence.append(tool2)  # inserted tool
+                # skip delete operations (no tool added)
+            actual_sequences.append(actual_sequence)
+        
+        # Create alignment graph (will compute Levenshtein alignment internally)
+        graph = create_alignment_graph(reference_sequence, actual_sequences)
     
     # Visualize using matplotlib
     fig = visualize_alignment_graph_matplotlib(graph, reference_sequence, figsize=(16, 12))

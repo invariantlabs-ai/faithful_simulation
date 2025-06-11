@@ -90,10 +90,7 @@ class WeightedLevenshteinMetric(EvaluationMetric):
             # Calculate weighted Levenshtein distance using optimized alignment
             alignment_result = await self.get_optimal_alignment(expected_tools, used_tools)
             distance = alignment_result["distance"]
-            
-            # Normalize to similarity score (0-1 range)
-            max_len = max(len(expected_tools), len(used_tools)) if expected_tools or used_tools else 1
-            similarity = 1.0 - (distance / max_len) if max_len > 0 else 1.0
+            similarity = alignment_result["similarity"]
             
             return EvaluationResult(
                 metric_name=self.metric_name,
@@ -102,7 +99,7 @@ class WeightedLevenshteinMetric(EvaluationMetric):
                     "expected_tools": expected_tools,
                     "used_tools": used_tools,
                     "raw_distance": distance,
-                    "max_length": max_len,
+                    "similarity": similarity,
                     "expected_length": len(expected_tools),
                     "used_length": len(used_tools),
                     "alignment": alignment_result["alignment"],
@@ -260,8 +257,13 @@ class WeightedLevenshteinMetric(EvaluationMetric):
         # Fill the matrix
         for i in range(1, len1 + 1):
             for j in range(1, len2 + 1):
+                # Add small position-dependent bias to prioritize early matches in actual sequence
+                # ref: 0, 1. Actual: 0, 0, 0, 1
+                # Want match, insert, insert, match
+                position_bias = 0.000001 * j
+                
                 if seq1[i-1] == seq2[j-1]:
-                    dp[i][j] = dp[i-1][j-1]  # No operation needed
+                    dp[i][j] = dp[i-1][j-1] + position_bias  # Match gets more expensive later
                     operations_matrix[i][j] = "match"
                 else:
                     # Calculate semantic similarity for substitution cost
@@ -269,7 +271,7 @@ class WeightedLevenshteinMetric(EvaluationMetric):
                     substitution_cost = 1.0 - similarity
                     
                     deletion_cost = dp[i-1][j] + 1.0
-                    insertion_cost = dp[i][j-1] + 1.0
+                    insertion_cost = dp[i][j-1] + 1.0  # Insertion cheaper later
                     substitution_total_cost = dp[i-1][j-1] + substitution_cost
                     
                     min_cost = min(deletion_cost, insertion_cost, substitution_total_cost)
@@ -323,8 +325,14 @@ class WeightedLevenshteinMetric(EvaluationMetric):
         alignment.reverse()
         operations.reverse()
         
+        # Calculate similarity using expected_tools length (seq1 is expected/reference)
+        expected_len = len(seq1) if seq1 else 1
+        raw_distance = dp[len1][len2]
+        similarity = max(0.0, 1.0 - (raw_distance / expected_len)) if expected_len > 0 else 1.0
+        
         return {
-            "distance": dp[len1][len2],
+            "distance": raw_distance,
+            "similarity": similarity,
             "alignment": alignment,
             "operations": operations
         }
