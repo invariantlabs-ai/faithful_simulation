@@ -161,62 +161,57 @@ class SimulatedEnvironment(EnvironmentInterface):
         parsed_args = json.loads(arguments)
         
         # Create a prompt for the LLM to simulate the tool behavior
-        base_system_prompt = f"""You are simulating the behavior of a tool called '{tool_name}'. 
+        system_prompt = f"""You are simulating the execution of a tool called '{tool_name}'. 
 Description: {tool_info['description']}
 Parameters: {json.dumps(tool_info['parameters'], indent=2)}
 
-Your task is to generate a realistic response as if you were this tool. Generate output in plain text format only. Assume that the tool call is always valid for the tool.
-Given the tool and the arguments provided, what would be a realistic response?
+CRITICAL: You must simulate ONLY this specific tool performing its documented function. Your response should reflect the result AFTER this tool has completed its operation successfully.
+
+- If the tool reads/queries data: Show the actual data that would be returned
+- If the tool modifies/creates content: Show the content as it would exist after the modification
+- If the tool performs an action: Show the outcome/result of that action being completed
+- Always simulate that the operation succeeds unless the arguments are clearly invalid
+
+STRICT REQUIREMENTS:
+- Simulate ONLY the tool named '{tool_name}', not any other tool
+- Use ONLY information from the provided arguments, no external context
+- Do not perform actions beyond what this specific tool is designed to do
 
 Here is the state of previous tool calls and responses to maintain consistency:
 {json.dumps(self.state, indent=2)}
 
-Respond as the tool would, not as an assistant. Do not include any explanations or metadata."""
+Execute the '{tool_name}' tool operation with the given arguments and respond with the result as this tool would output it. Do not include explanations or metadata."""
 
-        # Add user goal context if provided
         if self.user_goal:
             user_goal_prompt = f"""
 
 USER GOAL CONTEXT: {self.user_goal}
-IMPORTANT: You are simulating the environment state, NOT solving the user's task. The user goal is provided only for context about what kind of realistic environment state should exist. Do NOT pre-complete the user's task or make changes that would solve their goal. Instead, simulate what the current state would realistically be BEFORE the user starts working on their task. For example:
-- If they want to update a file, show the file's current content (not already updated)
-- If they want to find files, show realistic directory structures (but don't highlight the target)
-- If they want to create something, show the environment as it exists before creation
-Your job is to provide realistic environmental responses that allow the agent to work toward the goal, not to solve the goal directly."""
-            base_system_prompt = base_system_prompt + user_goal_prompt
+IMPORTANT: This context is provided ONLY to help you understand what realistic data/environment should exist for simulation purposes. Do NOT use any specific details from this context in your response. Do NOT anticipate or pre-complete any part of the user's goal. Execute ONLY the specific '{tool_name}' tool with the provided arguments."""
+            system_prompt = system_prompt + user_goal_prompt
 
-        # Add personality-specific behavior if specified
         if self.personality:
             personality_prompt = f"""
 
 ENVIRONMENT PERSONALITY: {self.personality}
 Adjust the tool's behavior and responses according to this personality while maintaining the tool's core functionality."""
-            system_prompt = base_system_prompt + personality_prompt
-        else:
-            system_prompt = base_system_prompt
+            system_prompt = system_prompt + personality_prompt
          
         user_prompt = f"Arguments: {arguments}"
         
-        try:
-            # Use LLM to simulate tool response
-            response = await litellm.acompletion(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                **self.llm_config
-            )
-            
-            result = response.choices[0].message.content
-            
-            # Save the tool call and response to state
-            self.state.append({
-                "tool_name": tool_name,
-                "arguments": parsed_args,
-                "response": result
-            })
-            
-            return tool_call_id, result
-        except Exception as e:
-            logger.exception(f"Error simulating tool {tool_name}")
-            return tool_call_id, f"Error simulating tool {tool_name}: {str(e)}"
+        response = await litellm.acompletion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            **self.llm_config
+        )
+        
+        result = response.choices[0].message.content
+        
+        self.state.append({
+            "tool_name": tool_name,
+            "arguments": parsed_args,
+            "response": result
+        })
+        
+        return tool_call_id, result

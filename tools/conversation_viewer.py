@@ -21,7 +21,9 @@ import sys
 from pathlib import Path
 
 from afma.alignment_visualization import (
-    create_trace_alignment_graph_base64 as create_trace_alignment_graph
+    create_trace_alignment_graph_base64 as create_trace_alignment_graph,
+    create_merged_trace_alignment_graph_base64,
+    get_graph_statistics
 )
 
 
@@ -202,6 +204,60 @@ def analyze_alignment_patterns(trace_alignments: Dict[str, Any]) -> Dict[str, An
     }
 
 
+def analyze_alignment_patterns_by_personality(conversations: List[Dict[str, Any]], trace_alignments: Dict[str, Any], user_personality: str = None, env_personality: str = None) -> Dict[str, Any]:
+    """Analyze alignment patterns filtered by personality types."""
+    if not trace_alignments:
+        return {}
+    
+    # Filter conversations by personality
+    filtered_conversations = conversations
+    if user_personality and user_personality != "All":
+        filtered_conversations = [c for c in filtered_conversations if c.get('user_personality') == user_personality]
+    if env_personality and env_personality != "All":
+        filtered_conversations = [c for c in filtered_conversations if c.get('environment_personality') == env_personality]
+    
+    # Get trace set IDs for filtered conversations
+    relevant_trace_sets = set()
+    for conv in filtered_conversations:
+        if 'trace_set_id' in conv:
+            relevant_trace_sets.add(conv['trace_set_id'])
+    
+    # Counters for different types of operations
+    substitutions = Counter()
+    insertions = Counter()
+    deletions = Counter()
+    total_operations = Counter()
+    
+    # Process relevant trace alignments only
+    for trace_set_id, alignment_data in trace_alignments.items():
+        if trace_set_id not in relevant_trace_sets:
+            continue
+            
+        alignments = alignment_data.get("alignments", [])
+        
+        for alignment in alignments:
+            operations = alignment.get("operations", [])
+            
+            for op_type, tool1, tool2 in operations:
+                total_operations[op_type] += 1
+                
+                if op_type == "substitute":
+                    substitutions[(tool1, tool2)] += 1
+                elif op_type == "insert":
+                    insertions[tool2] += 1
+                elif op_type == "delete":
+                    deletions[tool1] += 1
+    
+    return {
+        "substitutions": substitutions,
+        "insertions": insertions,
+        "deletions": deletions,
+        "total_operations": total_operations,
+        "conversation_count": len(filtered_conversations),
+        "trace_set_count": len(relevant_trace_sets)
+    }
+
+
 def main():
     st.set_page_config(
         page_title="Conversation Viewer",
@@ -354,7 +410,7 @@ def main():
     st.sidebar.markdown(f"**Filtered: {len(filtered_conversations)} conversations**")
     
     # Main content tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🔍 Browse Conversations", "📈 Similarity Analysis", "🧬 Trace Alignments"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Overview", "🔍 Browse Conversations", "📈 Similarity Analysis", "🧬 Trace Alignments", "👥 Personality Comparisons"])
     
     with tab1:
         st.header("Dataset Overview")
@@ -1016,6 +1072,213 @@ def main():
                     st.markdown("**Trace Information:**")
                     st.write(f"Trace Set ID: {conv.get('trace_set_id', 'N/A')}")
                     st.write(f"Instance ID: {conv.get('instantiation_id', 'N/A')}")
+
+
+    with tab5:
+        st.header("👥 Personality Comparisons")
+        
+        if not trace_alignments:
+            st.warning("No trace alignment data available. Upload trace_alignments.json to view personality comparisons.")
+            return
+        
+        if not conversations:
+            st.warning("No conversations loaded. Please upload conversations to view personality comparisons.")
+            return
+        
+        st.markdown("Compare alignment error patterns across different user and environment personalities.")
+        
+        # Filter controls
+        st.subheader("🎛️ Filtering Controls")
+        
+        filter_col1, filter_col2, filter_col3 = st.columns(3)
+        
+        with filter_col1:
+            selected_user_personalities = st.multiselect(
+                "User Personalities",
+                ["All"] + user_personalities,
+                default=["All"],
+                help="Select user personalities to compare"
+            )
+        
+        with filter_col2:
+            selected_env_personalities = st.multiselect(
+                "Environment Personalities", 
+                ["All"] + env_personalities,
+                default=["All"],
+                help="Select environment personalities to compare"
+            )
+        
+        with filter_col3:
+            comparison_type = st.radio(
+                "Comparison Type",
+                ["User Personalities", "Environment Personalities", "User vs Environment"],
+                help="Choose what to compare"
+            )
+        
+        # Generate comparison data
+        comparison_data = {}
+        
+        if comparison_type == "User Personalities":
+            personalities_to_compare = [p for p in selected_user_personalities if p in user_personalities] if "All" not in selected_user_personalities else user_personalities
+            
+            for personality in personalities_to_compare:
+                patterns = analyze_alignment_patterns_by_personality(conversations, trace_alignments, user_personality=personality)
+                comparison_data[f"User: {personality}"] = patterns
+        
+        elif comparison_type == "Environment Personalities":
+            personalities_to_compare = [p for p in selected_env_personalities if p in env_personalities] if "All" not in selected_env_personalities else env_personalities
+            
+            for personality in personalities_to_compare:
+                patterns = analyze_alignment_patterns_by_personality(conversations, trace_alignments, env_personality=personality)
+                comparison_data[f"Env: {personality}"] = patterns
+        
+        else:  # User vs Environment
+            # Compare each user personality with each environment personality
+            user_ps = [p for p in selected_user_personalities if p in user_personalities] if "All" not in selected_user_personalities else user_personalities
+            env_ps = [p for p in selected_env_personalities if p in env_personalities] if "All" not in selected_env_personalities else env_personalities
+            
+            for user_p in user_ps:
+                for env_p in env_ps:
+                    patterns = analyze_alignment_patterns_by_personality(conversations, trace_alignments, user_personality=user_p, env_personality=env_p)
+                    if patterns.get("conversation_count", 0) > 0:  # Only include combinations with data
+                        comparison_data[f"U:{user_p} + E:{env_p}"] = patterns
+        
+        if not comparison_data:
+            st.warning("No data available for the selected personality combinations.")
+            return
+        
+        # Display comparison results
+        st.markdown("---")
+        st.subheader("📊 Comparison Results")
+        
+        # Overview metrics
+        st.subheader("📈 Overview Metrics")
+        
+        metrics_data = []
+        for group_name, patterns in comparison_data.items():
+            total_ops = patterns.get("total_operations", Counter())
+            conversation_count = patterns.get("conversation_count", 0)
+            trace_set_count = patterns.get("trace_set_count", 0)
+            
+            total_error_ops = sum(count for op_type, count in total_ops.items() if op_type != "match")
+            total_all_ops = sum(total_ops.values())
+            error_rate = (total_error_ops / total_all_ops * 100) if total_all_ops > 0 else 0
+            
+            metrics_data.append({
+                "Group": group_name,
+                "Conversations": conversation_count,
+                "Trace Sets": trace_set_count,
+                "Total Operations": total_all_ops,
+                "Error Rate (%)": round(error_rate, 1),
+                "Substitutions": total_ops.get("substitute", 0),
+                "Insertions": total_ops.get("insert", 0),
+                "Deletions": total_ops.get("delete", 0)
+            })
+        
+        if metrics_data:
+            metrics_df = pd.DataFrame(metrics_data)
+            st.dataframe(metrics_df, use_container_width=True)
+        
+        # Detailed pattern comparisons
+        st.subheader("🔍 Detailed Pattern Analysis")
+        
+        comparison_tabs = st.tabs(["🔄 Substitutions", "➕ Insertions", "❌ Deletions"])
+        
+        with comparison_tabs[0]:
+            st.markdown("**Most Common Substitutions by Group**")
+            
+            for group_name, patterns in comparison_data.items():
+                substitutions = patterns.get("substitutions", Counter())
+                if substitutions:
+                    st.markdown(f"**{group_name}:**")
+                    top_substitutions = substitutions.most_common(5)
+                    for (from_tool, to_tool), count in top_substitutions:
+                        st.markdown(f"  • **{count}x:** `{from_tool}` → `{to_tool}`")
+                else:
+                    st.markdown(f"**{group_name}:** *No substitutions*")
+                st.markdown("")
+        
+        with comparison_tabs[1]:
+            st.markdown("**Most Common Insertions by Group**")
+            
+            for group_name, patterns in comparison_data.items():
+                insertions = patterns.get("insertions", Counter())
+                if insertions:
+                    st.markdown(f"**{group_name}:**")
+                    top_insertions = insertions.most_common(5)
+                    for tool, count in top_insertions:
+                        st.markdown(f"  • **{count}x:** `{tool}`")
+                else:
+                    st.markdown(f"**{group_name}:** *No insertions*")
+                st.markdown("")
+        
+        with comparison_tabs[2]:
+            st.markdown("**Most Common Deletions by Group**")
+            
+            for group_name, patterns in comparison_data.items():
+                deletions = patterns.get("deletions", Counter())
+                if deletions:
+                    st.markdown(f"**{group_name}:**")
+                    top_deletions = deletions.most_common(5)
+                    for tool, count in top_deletions:
+                        st.markdown(f"  • **{count}x:** `{tool}`")
+                else:
+                    st.markdown(f"**{group_name}:** *No deletions*")
+                st.markdown("")
+        
+        # Insights and recommendations
+        st.subheader("💡 Insights & Recommendations")
+        
+        insights = []
+        
+        # Find personality with highest error rate
+        if len(comparison_data) > 1:
+            error_rates = {}
+            for group_name, patterns in comparison_data.items():
+                total_ops = patterns.get("total_operations", Counter())
+                total_error_ops = sum(count for op_type, count in total_ops.items() if op_type != "match")
+                total_all_ops = sum(total_ops.values())
+                error_rate = (total_error_ops / total_all_ops * 100) if total_all_ops > 0 else 0
+                error_rates[group_name] = error_rate
+            
+            if error_rates:
+                highest_error_group = max(error_rates.items(), key=lambda x: x[1])
+                lowest_error_group = min(error_rates.items(), key=lambda x: x[1])
+                
+                insights.append(f"**Highest error rate:** {highest_error_group[0]} ({highest_error_group[1]:.1f}%)")
+                insights.append(f"**Lowest error rate:** {lowest_error_group[0]} ({lowest_error_group[1]:.1f}%)")
+        
+        # Find most problematic tools across groups
+        all_problematic_tools = Counter()
+        for patterns in comparison_data.values():
+            substitutions = patterns.get("substitutions", Counter())
+            deletions = patterns.get("deletions", Counter())
+            
+            for (from_tool, to_tool), count in substitutions.items():
+                all_problematic_tools[from_tool] += count
+            for tool, count in deletions.items():
+                all_problematic_tools[tool] += count
+        
+        if all_problematic_tools:
+            most_problematic = all_problematic_tools.most_common(3)
+            insights.append(f"**Most problematic tools overall:** {', '.join([f'`{tool}` ({count} errors)' for tool, count in most_problematic])}")
+        
+        # Find most commonly added tools across groups
+        all_insertions = Counter()
+        for patterns in comparison_data.values():
+            insertions = patterns.get("insertions", Counter())
+            for tool, count in insertions.items():
+                all_insertions[tool] += count
+        
+        if all_insertions:
+            most_added = all_insertions.most_common(3)
+            insights.append(f"**Most commonly added tools overall:** {', '.join([f'`{tool}` ({count}x)' for tool, count in most_added])}")
+        
+        for insight in insights:
+            st.markdown(insight)
+        
+        if not insights:
+            st.info("Analyze multiple personality groups to see comparative insights.")
 
 
 if __name__ == "__main__":

@@ -132,7 +132,7 @@ class UserSet(ABC):
 
 
 class CombinatoricUserSet(UserSet):
-    def __init__(self, tools_info: list[dict[str, Any]], generation_llm_config: dict[str, Any], simulation_llm_config: dict[str, Any], permutation_lengths: list[int], max_users_per_len: Optional[int] = None, semaphore_limit: int = 10, personalities: Optional[list[dict[str, str]]] = None):
+    def __init__(self, tools_info: list[dict[str, Any]], generation_llm_config: dict[str, Any], simulation_llm_config: dict[str, Any], permutation_lengths: list[int], max_users_per_len: Optional[int] = None, semaphore_limit: int = 10, personalities: Optional[list[dict[str, str]]] = None, random_seed: Optional[int] = 42):
         self.tools_info = tools_info
         self.generation_llm_config = generation_llm_config
         self.simulation_llm_config = simulation_llm_config
@@ -140,6 +140,7 @@ class CombinatoricUserSet(UserSet):
         self.max_users_per_len = max_users_per_len
         self.semaphore = asyncio.Semaphore(semaphore_limit)
         self.personalities = personalities or []
+        self._rng = random.Random(random_seed) if random_seed is not None else random
 
     async def generate_users(self) -> list[User]:
         all_tasks = []
@@ -149,7 +150,7 @@ class CombinatoricUserSet(UserSet):
             all_perms = list(itertools.permutations(self.tools_info, length))
             
             if self.max_users_per_len is not None and len(all_perms) > self.max_users_per_len:
-                selected_perms = random.sample(all_perms, self.max_users_per_len)
+                selected_perms = self._rng.sample(all_perms, self.max_users_per_len)
             else:
                 selected_perms = all_perms
             

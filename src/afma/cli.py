@@ -161,92 +161,162 @@ def run_pipeline_command(config_path: str, output_dir: str):
             timeout = simulation_config["timeout"]
             all_tools = await get_tools_from_mcp_config(mcp_config_path, timeout)
             
-            # Generate users with personalities
-            user_config = config["user"]
-            user_personalities = user_generation_config["personalities"]
-            user_set = CombinatoricUserSet(
-                tools_info=all_tools,
-                generation_llm_config=user_generation_config["litellm"],
-                simulation_llm_config=user_config["litellm"],
-                permutation_lengths=user_generation_config["permutation_lengths"],
-                max_users_per_len=user_generation_config["max_users_per_len"],
-                semaphore_limit=user_generation_config["semaphore_limit"],
-                personalities=user_personalities
-            )
-            
-            logger.info("Generating users...")
-            users = await user_set.generate_users()
-            logger.success(f"Generated {len(users)} users")
-            
-            # Save user profiles
+            # Check if user profiles already exist
             user_profiles_path = os.path.join(output_dir, "user_profiles.json")
-            user_profiles = [{
-                "user_goal": user.user_goal,
-                "source": user.source,
-                "personality": getattr(user, 'personality', None),
-                "max_turns": user.max_turns
-            } for user in users]
-            with open(user_profiles_path, 'w') as f:
-                json.dump(user_profiles, f, indent=2)
-            logger.success(f"Saved {len(user_profiles)} user profiles to {user_profiles_path}")
+            users = []
             
-            # Run simulations with different environment personalities
-            environment_personalities = environment_config["simulated_qualities"]
-            use_simulated_env = environment_config["simulated"]
-            instantiations_per_trace = simulation_config["instantiations_per_trace"]
+            if os.path.exists(user_profiles_path):
+                logger.info(f"Loading existing user profiles from {user_profiles_path}")
+                with open(user_profiles_path, 'r') as f:
+                    user_profiles = json.load(f)
+                
+                # Reconstruct User objects from saved profiles
+                user_config = config["user"]
+                for profile in user_profiles:
+                    user = User(
+                        user_goal=profile["user_goal"],
+                        llm_config=user_config["litellm"],
+                        source=profile["source"],
+                        max_turns=profile["max_turns"],
+                        personality=profile.get("personality")
+                    )
+                    users.append(user)
+                logger.success(f"Loaded {len(users)} users from existing profiles")
+            else:
+                # Generate users with personalities
+                user_config = config["user"]
+                user_personalities = user_generation_config["personalities"]
+                user_set = CombinatoricUserSet(
+                    tools_info=all_tools,
+                    generation_llm_config=user_generation_config["litellm"],
+                    simulation_llm_config=user_config["litellm"],
+                    permutation_lengths=user_generation_config["permutation_lengths"],
+                    max_users_per_len=user_generation_config["max_users_per_len"],
+                    semaphore_limit=user_generation_config["semaphore_limit"],
+                    personalities=user_personalities
+                )
+                
+                logger.info("Generating users...")
+                users = await user_set.generate_users()
+                logger.success(f"Generated {len(users)} users")
+                
+                # Save user profiles
+                user_profiles = [{
+                    "user_goal": user.user_goal,
+                    "source": user.source,
+                    "personality": getattr(user, 'personality', None),
+                    "max_turns": user.max_turns
+                } for user in users]
+                with open(user_profiles_path, 'w') as f:
+                    json.dump(user_profiles, f, indent=2)
+                logger.success(f"Saved {len(user_profiles)} user profiles to {user_profiles_path}")
             
-            all_conversations = []
-            concurrency = simulation_config["concurrency"]
-            max_turns = simulation_config["max_turns"]
+            # Check if conversations already exist
+            conversations_path = os.path.join(output_dir, "conversations.json")
+            conversation_summaries_path = os.path.join(output_dir, "conversation_summaries.json")
             
-            # Create semaphore for simulation concurrency
-            semaphore = asyncio.Semaphore(concurrency)
-            
-            async def run_single_simulation(user, env_personality_info, trace_set_id, instantiation_id):
-                async with semaphore:
-                    env_personality = env_personality_info.get("description") if env_personality_info else None
-                    env_name = env_personality_info.get("name") if env_personality_info else "default"
-                    
-                    # Create environment based on simulation mode
-                    if use_simulated_env:
-                        environment = SimulatedEnvironment(mcp_config_path, agent_config.get("litellm", {}), timeout, env_personality, user.user_goal)
-                    else:
-                        from .simulation.environment import Environment
-                        environment = Environment(mcp_config_path, timeout)
-                    
-                    agent = Agent(agent_config.get("litellm", {}), environment)
-                    
-                    try:
-                        history = await user.talk_with(agent, max_turns=max_turns)
-                    except Exception as e:
-                        logger.error(f"Error in simulation: {e}")
-                        return None
-                    
-                    return {
-                        "user_goal": user.user_goal,
-                        "user_source": user.source,
-                        "used_tools": agent.get_used_tools(),
-                        "history": history,
-                        "user_personality": getattr(user, 'personality', None),
-                        "environment_personality": env_personality,
-                        "trace_set_id": trace_set_id,
-                        "instantiation_id": instantiation_id,
-                        "trace_set_metadata": {
+            if os.path.exists(conversations_path):
+                logger.info(f"Loading existing conversations from {conversations_path}")
+                with open(conversations_path, 'r') as f:
+                    all_conversations = json.load(f)
+                logger.success(f"Loaded {len(all_conversations)} conversations from existing file")
+                
+                # Also load conversation summaries if they exist, otherwise regenerate them
+                if os.path.exists(conversation_summaries_path):
+                    logger.info(f"Loading existing conversation summaries from {conversation_summaries_path}")
+                else:
+                    logger.info("Regenerating conversation summaries from loaded conversations")
+                    conversation_summaries = [{
+                        "conversation_id": i,
+                        "user_goal": conv["user_goal"],
+                        "user_personality": conv.get("user_personality"),
+                        "environment_personality": conv.get("environment_personality"),
+                        "expected_tools": [tool["name"] for tool in conv["user_source"]],
+                        "used_tools": conv["used_tools"],
+                        "tool_sequence_length": len(conv["user_source"]),
+                        "conversation_length": len(conv["history"]),
+                        "tools_match": conv["used_tools"] == [tool["name"] for tool in conv["user_source"]],
+                        "trace_set_id": conv.get("trace_set_id"),
+                        "instantiation_id": conv.get("instantiation_id")
+                    } for i, conv in enumerate(all_conversations)]
+                    with open(conversation_summaries_path, 'w') as f:
+                        json.dump(conversation_summaries, f, indent=2)
+                    logger.success(f"Saved conversation summaries to {conversation_summaries_path}")
+            else:
+                # Run simulations with different environment personalities
+                environment_personalities = environment_config["simulated_qualities"]
+                use_simulated_env = environment_config["simulated"]
+                instantiations_per_trace = simulation_config["instantiations_per_trace"]
+                
+                all_conversations = []
+                concurrency = simulation_config["concurrency"]
+                max_turns = simulation_config["max_turns"]
+                
+                # Create semaphore for simulation concurrency
+                semaphore = asyncio.Semaphore(concurrency)
+                
+                async def run_single_simulation(user, env_personality_info, trace_set_id, instantiation_id):
+                    async with semaphore:
+                        env_personality = env_personality_info.get("description") if env_personality_info else None
+                        env_name = env_personality_info.get("name") if env_personality_info else "default"
+                        
+                        # Create environment based on simulation mode
+                        if use_simulated_env:
+                            environment = SimulatedEnvironment(mcp_config_path, agent_config.get("litellm", {}), timeout, env_personality, user.user_goal)
+                        else:
+                            from .simulation.environment import Environment
+                            environment = Environment(mcp_config_path, timeout)
+                        
+                        agent = Agent(agent_config.get("litellm", {}), environment)
+                        
+                        try:
+                            history = await user.talk_with(agent, max_turns=max_turns)
+                        except Exception as e:
+                            logger.error(f"Error in simulation: {e}")
+                            return None
+                        
+                        return {
                             "user_goal": user.user_goal,
+                            "user_source": user.source,
+                            "used_tools": agent.get_used_tools(),
+                            "history": history,
                             "user_personality": getattr(user, 'personality', None),
                             "environment_personality": env_personality,
-                            "expected_tools": [tool["name"] for tool in user.source]
+                            "trace_set_id": trace_set_id,
+                            "instantiation_id": instantiation_id,
+                            "trace_set_metadata": {
+                                "user_goal": user.user_goal,
+                                "user_personality": getattr(user, 'personality', None),
+                                "environment_personality": env_personality,
+                                "expected_tools": [tool["name"] for tool in user.source]
+                            }
                         }
-                    }
+                    
+                # Create all simulation tasks with trace set tracking
+                simulation_tasks = []
+                trace_set_counter = 0
                 
-            # Create all simulation tasks with trace set tracking
-            simulation_tasks = []
-            trace_set_counter = 0
-            
-            for user in users:
-                if use_simulated_env and environment_personalities:
-                    # Run with each environment personality
-                    for env_personality_info in environment_personalities:
+                for user in users:
+                    if use_simulated_env and environment_personalities:
+                        # Run with each environment personality
+                        for env_personality_info in environment_personalities:
+                            trace_set_id = f"trace_set_{trace_set_counter}"
+                            
+                            # Run multiple instantiations for the same trace set
+                            for instantiation_id in range(instantiations_per_trace):
+                                # Create a fresh copy of the user for each instantiation
+                                fresh_user = User(
+                                    user_goal=user.user_goal,
+                                    llm_config=user.llm_config,
+                                    source=user.source,
+                                    max_turns=user.max_turns,
+                                    personality=getattr(user, 'personality', None)
+                                )
+                                simulation_tasks.append(run_single_simulation(fresh_user, env_personality_info, trace_set_id, instantiation_id))
+                            
+                            trace_set_counter += 1
+                    else:
+                        # Run with default environment
                         trace_set_id = f"trace_set_{trace_set_counter}"
                         
                         # Run multiple instantiations for the same trace set
@@ -259,68 +329,56 @@ def run_pipeline_command(config_path: str, output_dir: str):
                                 max_turns=user.max_turns,
                                 personality=getattr(user, 'personality', None)
                             )
-                            simulation_tasks.append(run_single_simulation(fresh_user, env_personality_info, trace_set_id, instantiation_id))
+                            simulation_tasks.append(run_single_simulation(fresh_user, None, trace_set_id, instantiation_id))
                         
                         trace_set_counter += 1
-                else:
-                    # Run with default environment
-                    trace_set_id = f"trace_set_{trace_set_counter}"
-                    
-                    # Run multiple instantiations for the same trace set
-                    for instantiation_id in range(instantiations_per_trace):
-                        # Create a fresh copy of the user for each instantiation
-                        fresh_user = User(
-                            user_goal=user.user_goal,
-                            llm_config=user.llm_config,
-                            source=user.source,
-                            max_turns=user.max_turns,
-                            personality=getattr(user, 'personality', None)
-                        )
-                        simulation_tasks.append(run_single_simulation(fresh_user, None, trace_set_id, instantiation_id))
-                    
-                    trace_set_counter += 1
+                
+                logger.info(f"Running {len(simulation_tasks)} simulations with concurrency {concurrency}")
+                
+                # Use tqdm to show progress for conversation generation
+                all_conversations = await tqdm.gather(
+                    *simulation_tasks,
+                    desc="Generating conversations",
+                    unit="conv",
+                    total=len(simulation_tasks)
+                )
+                logger.info(f"All conversations: {len(all_conversations)}")
+                all_conversations = [conv for conv in all_conversations if conv is not None]
+                logger.info(f"All conversations after filtering: {len(all_conversations)}")
+                
+                # Save raw conversations
+                with open(conversations_path, 'w') as f:
+                    json.dump(all_conversations, f, indent=2)
+                logger.success(f"Saved {len(all_conversations)} conversations to {conversations_path}")
+                
+                # Save conversation summaries for easier analysis
+                conversation_summaries = [{
+                    "conversation_id": i,
+                    "user_goal": conv["user_goal"],
+                    "user_personality": conv.get("user_personality"),
+                    "environment_personality": conv.get("environment_personality"),
+                    "expected_tools": [tool["name"] for tool in conv["user_source"]],
+                    "used_tools": conv["used_tools"],
+                    "tool_sequence_length": len(conv["user_source"]),
+                    "conversation_length": len(conv["history"]),
+                    "tools_match": conv["used_tools"] == [tool["name"] for tool in conv["user_source"]],
+                    "trace_set_id": conv.get("trace_set_id"),
+                    "instantiation_id": conv.get("instantiation_id")
+                } for i, conv in enumerate(all_conversations)]
+                with open(conversation_summaries_path, 'w') as f:
+                    json.dump(conversation_summaries, f, indent=2)
+                logger.success(f"Saved conversation summaries to {conversation_summaries_path}")
             
-            logger.info(f"Running {len(simulation_tasks)} simulations with concurrency {concurrency}")
-            
-            # Use tqdm to show progress for conversation generation
-            all_conversations = await tqdm.gather(
-                *simulation_tasks,
-                desc="Generating conversations",
-                unit="conv",
-                total=len(simulation_tasks)
-            )
-            logger.info(f"All conversations: {len(all_conversations)}")
-            all_conversations = [conv for conv in all_conversations if conv is not None]
-            logger.info(f"All conversations after filtering: {len(all_conversations)}")
-            
-            # Save raw conversations
-            conversations_path = os.path.join(output_dir, "conversations.json")
-            with open(conversations_path, 'w') as f:
-                json.dump(all_conversations, f, indent=2)
-            logger.success(f"Saved {len(all_conversations)} conversations to {conversations_path}")
-            
-            # Save conversation summaries for easier analysis
-            conversation_summaries_path = os.path.join(output_dir, "conversation_summaries.json")
-            conversation_summaries = [{
-                "conversation_id": i,
-                "user_goal": conv["user_goal"],
-                "user_personality": conv.get("user_personality"),
-                "environment_personality": conv.get("environment_personality"),
-                "expected_tools": [tool["name"] for tool in conv["user_source"]],
-                "used_tools": conv["used_tools"],
-                "tool_sequence_length": len(conv["user_source"]),
-                "conversation_length": len(conv["history"]),
-                "tools_match": conv["used_tools"] == [tool["name"] for tool in conv["user_source"]],
-                "trace_set_id": conv.get("trace_set_id"),
-                "instantiation_id": conv.get("instantiation_id")
-            } for i, conv in enumerate(all_conversations)]
-            with open(conversation_summaries_path, 'w') as f:
-                json.dump(conversation_summaries, f, indent=2)
-            logger.success(f"Saved conversation summaries to {conversation_summaries_path}")
-            
-            # Compute trace alignments
+            # Compute trace alignments if they don't already exist
             trace_alignment_config = config.get("trace_alignment", {"min_instantiations": 2, "store_alignment_details": True})
-            await compute_trace_alignments(all_conversations, all_tools, trace_alignment_config, output_dir)
+            alignments_path = os.path.join(output_dir, "trace_alignments.json")
+            alignment_summary_path = os.path.join(output_dir, "alignment_summary.json")
+            
+            if os.path.exists(alignments_path) and os.path.exists(alignment_summary_path):
+                logger.info(f"Loading existing trace alignments from {alignments_path}")
+                logger.success("Trace alignments already computed")
+            else:
+                await compute_trace_alignments(all_conversations, all_tools, trace_alignment_config, output_dir)
             
             logger.success(f"Pipeline completed! Results saved in {output_dir}")
             

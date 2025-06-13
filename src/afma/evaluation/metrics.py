@@ -55,7 +55,9 @@ class WeightedLevenshteinMetric(EvaluationMetric):
                  tool_definitions: Dict[str, Dict[str, Any]],
                  embedding_config: Dict[str, Any],
                  similarity_threshold: float = 0.8,
-                 cache_embeddings: bool = True):
+                 cache_embeddings: bool = True,
+                 temperature: float = 0.05,
+                 consecutive_duplicate_penalty: float = 0.2):
         """
         Initialize the weighted Levenshtein metric.
         
@@ -64,12 +66,16 @@ class WeightedLevenshteinMetric(EvaluationMetric):
             embedding_config: Configuration for litellm embedding calls
             similarity_threshold: Threshold above which tools are considered similar
             cache_embeddings: Whether to cache embeddings for efficiency
+            temperature: Temperature parameter for softmax normalization
+            consecutive_duplicate_penalty: Penalty for consecutive duplicate tool insertions
         """
         self.metric_name = "weighted_levenshtein"
         self.tool_definitions = tool_definitions
         self.embedding_config = embedding_config
         self.similarity_threshold = similarity_threshold
         self.cache_embeddings = cache_embeddings
+        self.temperature = temperature
+        self.consecutive_duplicate_penalty = consecutive_duplicate_penalty
         
         # Cache for embeddings and similarity scores
         self._embedding_cache: Dict[str, List[float]] = {}
@@ -129,6 +135,9 @@ class WeightedLevenshteinMetric(EvaluationMetric):
         Compares tool1 against all possible tools, normalizes similarities, and returns 
         the normalized similarity for tool2.
         """
+        if tool1 == tool2:
+            return 1.0
+        
         cache_key = tuple(sorted([tool1, tool2]))
         if cache_key in self._similarity_cache:
             return self._similarity_cache[cache_key]
@@ -137,6 +146,7 @@ class WeightedLevenshteinMetric(EvaluationMetric):
             query_embedding = await self._get_tool_embedding(tool1)
             
             all_tools = list(self.tool_definitions.keys())
+            all_tools.remove(tool1)
             all_similarities = []
             
             for tool in all_tools:
@@ -144,7 +154,7 @@ class WeightedLevenshteinMetric(EvaluationMetric):
                 similarity = 1 - cosine(query_embedding, tool_embedding)
                 all_similarities.append(similarity)
             
-            normalized_similarities = softmax(all_similarities).tolist()
+            normalized_similarities = softmax([sim / self.temperature for sim in all_similarities]).tolist()
             
             tool2_index = all_tools.index(tool2)
             similarity = normalized_similarities[tool2_index]
@@ -271,7 +281,16 @@ class WeightedLevenshteinMetric(EvaluationMetric):
                     substitution_cost = 1.0 - similarity
                     
                     deletion_cost = dp[i-1][j] + 1.0
-                    insertion_cost = dp[i][j-1] + 1.0  # Insertion cheaper later
+                    
+                    # Calculate insertion cost with reduced penalty for consecutive duplicates
+                    # Check if current tool in seq2 is same as previous tool in seq2
+                    if j >= 2 and seq2[j-1] == seq2[j-2]:
+                        # Consecutive duplicate gets reduced penalty
+                        insertion_cost = dp[i][j-1] + self.consecutive_duplicate_penalty
+                    else:
+                        # First occurrence or non-consecutive gets full penalty
+                        insertion_cost = dp[i][j-1] + 1.0
+                    
                     substitution_total_cost = dp[i-1][j-1] + substitution_cost
                     
                     min_cost = min(deletion_cost, insertion_cost, substitution_total_cost)

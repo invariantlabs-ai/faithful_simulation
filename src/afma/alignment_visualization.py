@@ -251,6 +251,7 @@ def visualize_alignment_graph_matplotlib(graph: nx.DiGraph, reference: List,
                                        figsize: Tuple[int, int] = (16, 12)) -> plt.Figure:
     """
     Visualize the alignment graph using matplotlib with color-coded nodes and weighted edges.
+    Enhanced to support merged nodes with purple coloring based on reference ratio.
     
     Args:
         graph: NetworkX DiGraph to visualize
@@ -266,57 +267,70 @@ def visualize_alignment_graph_matplotlib(graph: nx.DiGraph, reference: List,
     except:
         pos = nx.spring_layout(graph, k=3, iterations=50)
     
-    # Separate nodes by type
-    start_end_nodes = [node for node in graph.nodes() if node in ['START', 'END']]
-    ref_nodes = [node for node in graph.nodes() if node.startswith('ref_')]
-    seq_nodes = [node for node in graph.nodes() if node.startswith('seq_')]
+    # Separate nodes by type using node metadata
+    start_end_nodes = []
+    ref_nodes = []
+    var_nodes = []
+    merged_nodes = []
+    merged_colors = []
     
-    # Separate edges by type and get their weights
-    ref_backbone_edges = []  # only the original reference backbone
-    seq_edges = []           # all other edges (alignment-derived)
-    ref_backbone_weights = []
-    seq_edge_weights = []
-    
-    # Define the reference backbone edges explicitly
-    ref_values = reference
-    
-    # Identify first and last reference nodes
-    first_ref_node = ref_node(ref_values[0]) if ref_values else None
-    last_ref_node = ref_node(ref_values[-1]) if ref_values else None
-    
-    for i in range(len(ref_values) - 1):
-        backbone_edge = (ref_node(ref_values[i]), ref_node(ref_values[i + 1]))
-        if backbone_edge in graph.edges():
-            ref_backbone_edges.append(backbone_edge)
-            weight = graph[backbone_edge[0]][backbone_edge[1]].get('weight', 1)
-            ref_backbone_weights.append(max(weight * 2, 2))  # Scale edge weights for larger nodes
-    
-    # Separate start/end edges from other sequence edges
-    for edge in graph.edges():
-        if edge not in ref_backbone_edges:
-            if edge[0] in ['START', 'END'] or edge[1] in ['START', 'END']:
-                # Check if this start/end edge connects to reference start/end nodes
-                connects_to_ref_start_end = False
-                if edge[0] == 'START' and edge[1] == first_ref_node:
-                    connects_to_ref_start_end = True
-                elif edge[0] == last_ref_node and edge[1] == 'END':
-                    connects_to_ref_start_end = True
-                
-                weight = graph[edge[0]][edge[1]].get('weight', 1)
-                scaled_weight = max(weight * 2, 2)
-                
-                if connects_to_ref_start_end:
-                    # Add to backbone edges (blue)
-                    ref_backbone_edges.append(edge)
-                    ref_backbone_weights.append(scaled_weight)
-                else:
-                    # Add to sequence edges (red)
-                    seq_edges.append(edge)
-                    seq_edge_weights.append(scaled_weight)
+    for node in graph.nodes():
+        node_type = graph.nodes[node].get('node_type', 'unknown')
+        
+        if node_type == 'boundary':
+            start_end_nodes.append(node)
+        elif node_type == 'reference':
+            ref_nodes.append(node)
+        elif node_type == 'variation':
+            var_nodes.append(node)
+        elif node_type == 'merged':
+            merged_nodes.append(node)
+            # Calculate purple color based on reference ratio
+            ref_ratio = graph.nodes[node].get('ref_ratio', 0.5)
+            # Create purple color: blend between red (1,0,0) and blue (0,0,1)
+            # ref_ratio = 1.0 -> pure blue, ref_ratio = 0.0 -> pure red
+            red_component = 1.0 - ref_ratio
+            blue_component = ref_ratio
+            purple_color = (red_component, 0.0, blue_component)
+            merged_colors.append(purple_color)
+        else:
+            # Fallback for unknown node types
+            if node.startswith('ref_'):
+                ref_nodes.append(node)
+            elif node.startswith('seq_'):
+                var_nodes.append(node)
+            elif node.startswith('merged_'):
+                merged_nodes.append(node)
+                merged_colors.append((0.5, 0.0, 0.5))  # Default purple
             else:
-                seq_edges.append(edge)
-                weight = graph[edge[0]][edge[1]].get('weight', 1)
-                seq_edge_weights.append(max(weight * 2, 2))  # Scale edge weights for larger nodes
+                start_end_nodes.append(node)
+    
+    # Separate edges by type using edge metadata and node types
+    ref_edges = []
+    var_edges = []
+    merged_edges = []  # Edges involving merged nodes
+    ref_edge_weights = []
+    var_edge_weights = []
+    merged_edge_weights = []
+    
+    for edge in graph.edges():
+        edge_type = graph[edge[0]][edge[1]].get('edge_type', 'unknown')
+        edge_weight = max(graph[edge[0]][edge[1]].get('weight', 1) * 2, 2)
+        
+        source_node_type = graph.nodes[edge[0]].get('node_type', 'unknown')
+        target_node_type = graph.nodes[edge[1]].get('node_type', 'unknown')
+        
+        # Classify edges based on node types and edge metadata
+        if source_node_type == 'merged' or target_node_type == 'merged':
+            # Edge involving merged nodes - use purple/mixed coloring
+            merged_edges.append(edge)
+            merged_edge_weights.append(edge_weight)
+        elif edge_type == 'reference' or (source_node_type == 'reference' and target_node_type == 'reference'):
+            ref_edges.append(edge)
+            ref_edge_weights.append(edge_weight)
+        else:
+            var_edges.append(edge)
+            var_edge_weights.append(edge_weight)
     
     # Draw nodes with different colors
     if start_end_nodes:
@@ -325,48 +339,62 @@ def visualize_alignment_graph_matplotlib(graph: nx.DiGraph, reference: List,
     if ref_nodes:
         nx.draw_networkx_nodes(graph, pos, nodelist=ref_nodes, node_color="blue", 
                               node_size=6000, alpha=0.8, ax=ax)
-    if seq_nodes:
-        nx.draw_networkx_nodes(graph, pos, nodelist=seq_nodes, node_color="red", 
+    if var_nodes:
+        nx.draw_networkx_nodes(graph, pos, nodelist=var_nodes, node_color="red", 
+                              node_size=6000, alpha=0.8, ax=ax)
+    if merged_nodes and merged_colors:
+        nx.draw_networkx_nodes(graph, pos, nodelist=merged_nodes, node_color=merged_colors, 
                               node_size=6000, alpha=0.8, ax=ax)
     
     # Draw edges with different colors and weights
-    if ref_backbone_edges:
-        nx.draw_networkx_edges(graph, pos, edgelist=ref_backbone_edges, edge_color="blue", 
-                              arrows=True, alpha=0.6, arrowsize=40, width=ref_backbone_weights, 
+    if ref_edges:
+        nx.draw_networkx_edges(graph, pos, edgelist=ref_edges, edge_color="blue", 
+                              arrows=True, alpha=0.6, arrowsize=40, width=ref_edge_weights, 
                               min_source_margin=30, min_target_margin=30, ax=ax)
-    if seq_edges:
-        nx.draw_networkx_edges(graph, pos, edgelist=seq_edges, edge_color="red", 
-                              arrows=True, alpha=0.6, arrowsize=40, width=seq_edge_weights,
+    if var_edges:
+        nx.draw_networkx_edges(graph, pos, edgelist=var_edges, edge_color="red", 
+                              arrows=True, alpha=0.6, arrowsize=40, width=var_edge_weights,
+                              min_source_margin=30, min_target_margin=30, ax=ax)
+    if merged_edges:
+        nx.draw_networkx_edges(graph, pos, edgelist=merged_edges, edge_color="purple", 
+                              arrows=True, alpha=0.6, arrowsize=40, width=merged_edge_weights,
                               min_source_margin=30, min_target_margin=30, ax=ax)
     
-    # Create custom labels showing only the values
+    # Create custom labels showing only the tool names
     custom_labels = {}
     for node in graph.nodes():
         if node in ['START', 'END']:
-            # Keep START and END as is
             custom_labels[node] = node
-        elif node.startswith('ref_'):
-            # Extract value from ref_tool_name
-            tool_name = node[4:]  # Remove 'ref_' prefix
-        elif node.startswith('seq_'):
-            # Extract value from seq_tool_name_pos{position}
-            value_part = node[4:]  # Remove 'seq_' prefix
-            if '_pos' in value_part:
-                # Split on '_pos' to separate tool name from position
-                tool_name = value_part.split('_pos')[0]
-            else:
-                tool_name = value_part
         else:
-            tool_name = node  # Fallback
-        
-        # Format tool name: first 8 chars on first line, next 8 on second line
-        # (Skip this formatting for START/END nodes)
-        if node not in ['START', 'END']:
+            # Extract tool name from node metadata or node name
+            tool_name = graph.nodes[node].get('tool_name', None)
+            if tool_name is None:
+                # Fallback to parsing node name
+                if node.startswith('ref_'):
+                    tool_name = node[4:]
+                elif node.startswith('seq_'):
+                    value_part = node[4:]
+                    if '_pos' in value_part:
+                        tool_name = value_part.split('_pos')[0]
+                    else:
+                        tool_name = value_part
+                elif node.startswith('merged_'):
+                    value_part = node[7:]  # Remove 'merged_' prefix
+                    if '_pos' in value_part:
+                        tool_name = value_part.split('_pos')[0]
+                    elif '_ref' in value_part:
+                        tool_name = value_part.replace('_ref', '')
+                    else:
+                        tool_name = value_part
+                else:
+                    tool_name = node
+            
+            # Format tool name: first 8 chars on first line, next 8 on second line
             if len(tool_name) <= 8:
                 custom_labels[node] = tool_name
             else:
                 first_line = tool_name[:8]
-                second_line = tool_name[8:16]  # Take next 8 chars, strip the rest
+                second_line = tool_name[8:16]
                 custom_labels[node] = f"{first_line}\n{second_line}"
     
     # Draw labels
@@ -628,4 +656,439 @@ def save_alignment_graph(graph: nx.DiGraph, reference: List,
     fig = visualize_alignment_graph_matplotlib(graph, reference, figsize)
     plt.savefig(output_filename, dpi=300, bbox_inches='tight')
     plt.close(fig)
-    print(f"Graph saved as '{output_filename}'") 
+    print(f"Graph saved as '{output_filename}'")
+
+
+def merge_alignment_graphs(graphs: List[nx.DiGraph]) -> nx.DiGraph:
+    """
+    Merge multiple alignment graphs into a single graph using BFS traversal.
+    Enhanced to merge nodes of the same tool that appear as both reference and variation.
+    
+    The merging strategy:
+    1. Start BFS from START node in each graph
+    2. Identify nodes representing the same tool at the same position
+    3. Merge ref_tool and seq_tool_pos{X} nodes into merged_tool_pos{X} nodes
+    4. Sum edge weights when merging equivalent edges
+    5. Track reference vs variation usage ratios for purple coloring
+    
+    Args:
+        graphs: List of NetworkX DiGraphs to merge
+    
+    Returns:
+        Merged NetworkX DiGraph with node type information
+    """
+    if not graphs:
+        return nx.DiGraph()
+    
+    if len(graphs) == 1:
+        return graphs[0].copy()
+    
+    merged_graph = nx.DiGraph()
+    merged_edge_weights = {}
+    
+    # Track node usage statistics for merging decisions
+    node_usage = {}  # {(tool, position): {'ref_count': int, 'var_count': int, 'total_weight': int}}
+    
+    # Step 1: Analyze all nodes across graphs to identify merge candidates
+    for graph in graphs:
+        for node in graph.nodes():
+            if node in ['START', 'END']:
+                continue
+                
+            tool_name = None
+            position = None
+            node_type = None
+            
+            if node.startswith('ref_'):
+                tool_name = node[4:]  # Remove 'ref_' prefix
+                # For reference nodes, we need to determine their position in the reference sequence
+                # We'll use a special position marker for reference nodes
+                position = 'ref'
+                node_type = 'reference'
+            elif node.startswith('seq_'):
+                # Extract tool name and position from seq_tool_pos{position}
+                value_part = node[4:]  # Remove 'seq_' prefix
+                if '_pos' in value_part:
+                    tool_name, pos_part = value_part.split('_pos', 1)
+                    try:
+                        position = int(pos_part)
+                        node_type = 'variation'
+                    except ValueError:
+                        position = pos_part
+                        node_type = 'variation'
+                else:
+                    tool_name = value_part
+                    position = 'unknown'
+                    node_type = 'variation'
+            
+            if tool_name is not None and position is not None:
+                key = (tool_name, position)
+                if key not in node_usage:
+                    node_usage[key] = {'ref_count': 0, 'var_count': 0, 'total_weight': 0}
+                
+                if node_type == 'reference':
+                    node_usage[key]['ref_count'] += 1
+                elif node_type == 'variation':
+                    node_usage[key]['var_count'] += 1
+    
+    # Step 2: Create merged nodes with type information
+    node_mapping = {}  # Maps original nodes to merged node names
+    
+    for (tool, position), usage in node_usage.items():
+        ref_count = usage['ref_count']
+        var_count = usage['var_count']
+        total_count = ref_count + var_count
+        
+        # Determine merged node name and type
+        if ref_count > 0 and var_count > 0:
+            # Both reference and variation exist - create purple merged node
+            if position == 'ref':
+                merged_node = f"merged_{tool}_ref"
+            else:
+                merged_node = f"merged_{tool}_pos{position}"
+            node_type = 'merged'
+            ref_ratio = ref_count / total_count
+        elif ref_count > 0:
+            # Only reference - keep as blue
+            merged_node = f"ref_{tool}"
+            node_type = 'reference'
+            ref_ratio = 1.0
+        else:
+            # Only variation - keep as red
+            if position == 'ref':
+                merged_node = f"seq_{tool}_ref"
+            else:
+                merged_node = f"seq_{tool}_pos{position}"
+            node_type = 'variation'
+            ref_ratio = 0.0
+        
+        # Add merged node to graph with metadata
+        merged_graph.add_node(merged_node, node_type=node_type, ref_ratio=ref_ratio, 
+                             tool_name=tool, position=position)
+        
+        # Create mappings from original nodes to merged nodes
+        if ref_count > 0:
+            orig_ref_node = f"ref_{tool}"
+            node_mapping[orig_ref_node] = merged_node
+        
+        if var_count > 0:
+            if position == 'ref':
+                orig_var_node = f"seq_{tool}_ref"
+            else:
+                orig_var_node = f"seq_{tool}_pos{position}"
+            node_mapping[orig_var_node] = merged_node
+    
+    # Add START and END nodes
+    merged_graph.add_node("START", node_type="boundary")
+    merged_graph.add_node("END", node_type="boundary")
+    node_mapping["START"] = "START"
+    node_mapping["END"] = "END"
+    
+    # Step 3: Merge edges using BFS-like approach with node mapping
+    for graph in graphs:
+        if not graph.nodes():
+            continue
+            
+        # Use BFS to traverse this graph and merge edges
+        if "START" in graph.nodes():
+            visited = set()
+            queue = ["START"]
+            
+            while queue:
+                current_node = queue.pop(0)
+                
+                if current_node in visited:
+                    continue
+                visited.add(current_node)
+                
+                # Get merged node name for current node
+                merged_current = node_mapping.get(current_node, current_node)
+                
+                # Process all outgoing edges from current node
+                for successor in graph.successors(current_node):
+                    merged_successor = node_mapping.get(successor, successor)
+                    edge = (merged_current, merged_successor)
+                    
+                    # Get edge weight from this graph
+                    edge_weight = graph[current_node][successor].get('weight', 1)
+                    
+                    # Determine edge type based on source and target node types
+                    source_type = merged_graph.nodes[merged_current].get('node_type', 'unknown')
+                    target_type = merged_graph.nodes[merged_successor].get('node_type', 'unknown')
+                    
+                    if source_type == 'reference' and target_type == 'reference':
+                        edge_type = 'reference'
+                    elif source_type in ['boundary'] or target_type in ['boundary']:
+                        # Edge connecting to START/END
+                        if source_type == 'reference' or target_type == 'reference':
+                            edge_type = 'reference'
+                        else:
+                            edge_type = 'variation'
+                    else:
+                        edge_type = 'variation'
+                    
+                    # Add edge to merged graph if not exists
+                    if not merged_graph.has_edge(*edge):
+                        merged_graph.add_edge(*edge, edge_type=edge_type)
+                        merged_edge_weights[edge] = 0
+                    
+                    # Accumulate edge weight
+                    merged_edge_weights[edge] += edge_weight
+                    
+                    # Add successor to queue for further processing
+                    if successor not in visited:
+                        queue.append(successor)
+        else:
+            # Fallback: process all edges if no START node
+            for edge in graph.edges():
+                orig_source, orig_target = edge
+                merged_source = node_mapping.get(orig_source, orig_source)
+                merged_target = node_mapping.get(orig_target, orig_target)
+                merged_edge = (merged_source, merged_target)
+                
+                edge_weight = graph[orig_source][orig_target].get('weight', 1)
+                
+                if not merged_graph.has_edge(*merged_edge):
+                    merged_graph.add_edge(*merged_edge, edge_type='variation')
+                    merged_edge_weights[merged_edge] = 0
+                
+                merged_edge_weights[merged_edge] += edge_weight
+    
+    # Step 4: Add accumulated weights as edge attributes
+    for edge, total_weight in merged_edge_weights.items():
+        if merged_graph.has_edge(*edge):
+            merged_graph[edge[0]][edge[1]]['weight'] = total_weight
+    
+    return merged_graph
+
+
+def filter_alignment_graph(graph: nx.DiGraph, min_edge_weight: int = 1, min_node_degree: int = 1) -> nx.DiGraph:
+    """
+    Filter alignment graph by removing low-weight edges and low-degree nodes.
+    
+    Args:
+        graph: NetworkX DiGraph to filter
+        min_edge_weight: Minimum edge weight to keep (edges below this are removed)
+        min_node_degree: Minimum node degree to keep (nodes below this are removed)
+    
+    Returns:
+        Filtered NetworkX DiGraph
+    """
+    if not graph.nodes():
+        return graph.copy()
+    
+    filtered_graph = graph.copy()
+    
+    # Step 1: Filter edges by weight
+    edges_to_remove = []
+    for edge in filtered_graph.edges():
+        weight = filtered_graph[edge[0]][edge[1]].get('weight', 1)
+        if weight < min_edge_weight:
+            edges_to_remove.append(edge)
+    
+    filtered_graph.remove_edges_from(edges_to_remove)
+    
+    # Step 2: Filter nodes by degree (but preserve START and END)
+    nodes_to_remove = []
+    for node in filtered_graph.nodes():
+        if node in ['START', 'END']:
+            continue  # Always keep START and END nodes
+        
+        degree = filtered_graph.degree(node)  # Total degree (in + out)
+        if degree < min_node_degree:
+            nodes_to_remove.append(node)
+    
+    filtered_graph.remove_nodes_from(nodes_to_remove)
+    
+    # Step 3: Clean up orphaned nodes (nodes with no edges after filtering)
+    # but preserve START and END
+    orphaned_nodes = []
+    for node in filtered_graph.nodes():
+        if node in ['START', 'END']:
+            continue
+        if filtered_graph.degree(node) == 0:
+            orphaned_nodes.append(node)
+    
+    filtered_graph.remove_nodes_from(orphaned_nodes)
+    
+    return filtered_graph
+
+
+def get_graph_statistics(graph: nx.DiGraph) -> Dict[str, Any]:
+    """
+    Get statistics about the graph for display in UI.
+    
+    Args:
+        graph: NetworkX DiGraph to analyze
+    
+    Returns:
+        Dictionary with graph statistics
+    """
+    if not graph.nodes():
+        return {
+            'node_count': 0,
+            'edge_count': 0,
+            'max_edge_weight': 0,
+            'min_edge_weight': 0,
+            'avg_edge_weight': 0,
+            'max_node_degree': 0,
+            'min_node_degree': 0,
+            'avg_node_degree': 0
+        }
+    
+    # Edge weights
+    edge_weights = []
+    for edge in graph.edges():
+        weight = graph[edge[0]][edge[1]].get('weight', 1)
+        edge_weights.append(weight)
+    
+    # Node degrees
+    node_degrees = []
+    for node in graph.nodes():
+        if node not in ['START', 'END']:  # Exclude START/END from degree stats
+            degree = graph.degree(node)
+            node_degrees.append(degree)
+    
+    return {
+        'node_count': len(graph.nodes()),
+        'edge_count': len(graph.edges()),
+        'max_edge_weight': max(edge_weights) if edge_weights else 0,
+        'min_edge_weight': min(edge_weights) if edge_weights else 0,
+        'avg_edge_weight': sum(edge_weights) / len(edge_weights) if edge_weights else 0,
+        'max_node_degree': max(node_degrees) if node_degrees else 0,
+        'min_node_degree': min(node_degrees) if node_degrees else 0,
+        'avg_node_degree': sum(node_degrees) / len(node_degrees) if node_degrees else 0
+    }
+
+
+def create_merged_trace_alignment_graph_base64(all_trace_alignments: Dict[str, Any], 
+                                             figsize: Tuple[int, int] = (20, 16),
+                                             min_edge_weight: int = 1,
+                                             min_node_degree: int = 1) -> str:
+    """
+    Create a merged alignment graph from all trace alignments and return as base64 encoded image.
+    
+    Args:
+        all_trace_alignments: Dictionary of all trace alignment data keyed by trace_set_id
+        figsize: Figure size tuple
+        min_edge_weight: Minimum edge weight to keep (edges below this are removed)
+        min_node_degree: Minimum node degree to keep (nodes below this are removed)
+    
+    Returns:
+        Base64 encoded PNG image string
+    """
+    if not all_trace_alignments:
+        # Create a simple message figure
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.text(0.5, 0.5, "No trace alignment data available", 
+                ha='center', va='center', fontsize=16, transform=ax.transAxes)
+        ax.axis('off')
+        
+        # Convert to base64
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode()
+        plt.close(fig)
+        
+        return img_base64
+    
+    # Step 1: Create individual graphs for each trace set
+    individual_graphs = []
+    all_reference_sequences = []
+    
+    for trace_set_id, alignment_data in all_trace_alignments.items():
+        alignments = alignment_data.get("alignments", [])
+        reference_sequence = alignment_data.get("reference_sequence", [])
+        
+        if not alignments or len(alignments) <= 1:
+            continue  # Skip trace sets with insufficient data
+        
+        try:
+            # Check if we have pre-aligned data or need to extract from operations
+            if alignments and "alignment" in alignments[0]:
+                # Use pre-aligned data directly
+                aligned_sequences = []
+                for alignment_entry in alignments:
+                    aligned_seq = alignment_entry["alignment"]
+                    aligned_sequences.append(aligned_seq)
+                
+                # Create alignment graph from pre-aligned data
+                graph = create_alignment_graph_from_prealigned(reference_sequence, aligned_sequences)
+            else:
+                # Extract actual sequences from operations
+                actual_sequences = []
+                for alignment in alignments:
+                    actual_sequence = []
+                    for op_type, tool1, tool2 in alignment["operations"]:
+                        if op_type == "match":
+                            actual_sequence.append(tool2)
+                        elif op_type == "substitute":
+                            actual_sequence.append(tool2)
+                        elif op_type == "insert":
+                            actual_sequence.append(tool2)
+                        # skip delete operations
+                    actual_sequences.append(actual_sequence)
+                
+                # Create alignment graph
+                graph = create_alignment_graph(reference_sequence, actual_sequences)
+            
+            individual_graphs.append(graph)
+            all_reference_sequences.append(reference_sequence)
+            
+        except Exception as e:
+            print(f"Error processing trace set {trace_set_id}: {e}")
+            continue
+    
+    if not individual_graphs:
+        # Create error message figure
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.text(0.5, 0.5, "No valid trace alignments found for merging", 
+                ha='center', va='center', fontsize=16, transform=ax.transAxes)
+        ax.axis('off')
+        
+        # Convert to base64
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode()
+        plt.close(fig)
+        
+        return img_base64
+    
+    # Step 2: Merge all individual graphs
+    merged_graph = merge_alignment_graphs(individual_graphs)
+    
+    # Step 3: Create a combined reference sequence for visualization
+    # Use the most common tools across all reference sequences
+    from collections import Counter
+    all_tools = []
+    for ref_seq in all_reference_sequences:
+        all_tools.extend(ref_seq)
+    
+    # Use all unique tools as combined reference (preserving some order)
+    combined_reference = []
+    seen_tools = set()
+    for ref_seq in all_reference_sequences:
+        for tool in ref_seq:
+            if tool not in seen_tools:
+                combined_reference.append(tool)
+                seen_tools.add(tool)
+    
+    # Step 4: Filter the merged graph
+    filtered_graph = filter_alignment_graph(merged_graph, min_edge_weight, min_node_degree)
+    
+    # Step 5: Visualize the filtered graph
+    fig = visualize_alignment_graph_matplotlib(filtered_graph, combined_reference, figsize)
+    
+    # Add title indicating this is a merged view
+    fig.suptitle("Merged Alignment Graph - All Trace Sets Combined", fontsize=20, y=0.95)
+    
+    # Convert to base64
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.seek(0)
+    img_base64 = base64.b64encode(buf.read()).decode()
+    plt.close(fig)
+    
+    return img_base64 
