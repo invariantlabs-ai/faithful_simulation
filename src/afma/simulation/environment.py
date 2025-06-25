@@ -43,26 +43,20 @@ class Environment(EnvironmentInterface):
             tools_list = mcp_tools
 
         for tool in tools_list:
-            if hasattr(tool, 'name') and hasattr(tool, 'description'):
-                openai_name = tool.name # self._sanitize_tool_name(tool.name)
-
-                tool_schema = getattr(tool, 'inputSchema', {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                })
+            try:
+                openai_name = tool['name'] # self._sanitize_tool_name(tool.name)
 
                 openai_tool = {
                     "type": "function",
                     "function": {
                         "name": openai_name,
-                        "description": tool.description,
-                        "parameters": tool_schema
+                        "description": tool['description'],
+                        "parameters": tool['inputSchema']
                     }
                 }
                 openai_tools.append(openai_tool)
-            else:
-                logger.warning(f"Tool missing required attributes: has name = {hasattr(tool, 'name')}, has description = {hasattr(tool, 'description')}")
+            except Exception:
+                logger.exception(f"Error converting tool {tool} to OpenAI format")
 
         return openai_tools
 
@@ -93,7 +87,15 @@ class Environment(EnvironmentInterface):
 
                     try:
                         tool_list = (await session.list_tools()).tools
-                        server_by_tool_name.update({tool.name: server_idx for tool in tool_list})
+                        tool_list = [
+                            {
+                                "name": f"{server_name}_{tool.name}",
+                                "description": tool.description,
+                                "inputSchema": tool.inputSchema
+                            }
+                            for tool in tool_list
+                        ]
+                        server_by_tool_name.update({tool["name"]: server_idx for tool in tool_list})
                         tools.extend(tool_list)
                     except Exception:
                         logger.exception(f"Error listing tools for server {server_idx}") # It should have tools
@@ -132,14 +134,14 @@ class Environment(EnvironmentInterface):
 
 
 class SimulatedEnvironment(EnvironmentInterface):
-    def __init__(self, mcp_config_path: str, llm_config: dict[str, Any], timeout: int = 10, personality: Optional[str] = None, user_goal: Optional[str] = None):
+    def __init__(self, mcp_config_path: str, llm_config: dict[str, Any], timeout: int = 10, personality: Optional[str] = None, environment_expectations: Optional[str] = None):
         self.real_environment = Environment(mcp_config_path, timeout)
         self.llm_config = llm_config
         self.tools = None
         self.tools_by_name = {}
         self.state = []  # History of tool calls and responses to maintain consistency
         self.personality = personality
-        self.user_goal = user_goal
+        self.environment_expectations = environment_expectations
     
     async def collect_resources(self):
         """Get real tools from the MCP servers but use them for simulation"""
@@ -165,12 +167,11 @@ class SimulatedEnvironment(EnvironmentInterface):
 Description: {tool_info['description']}
 Parameters: {json.dumps(tool_info['parameters'], indent=2)}
 
-CRITICAL: You must simulate ONLY this specific tool performing its documented function. Your response should reflect the result AFTER this tool has completed its operation successfully.
+CRITICAL: You must simulate ONLY this specific tool performing its documented function. Your response should reflect the result AFTER this tool has completed its operation.
 
 - If the tool reads/queries data: Show the actual data that would be returned
 - If the tool modifies/creates content: Show the content as it would exist after the modification
 - If the tool performs an action: Show the outcome/result of that action being completed
-- Always simulate that the operation succeeds unless the arguments are clearly invalid
 
 STRICT REQUIREMENTS:
 - Simulate ONLY the tool named '{tool_name}', not any other tool
@@ -182,18 +183,18 @@ Here is the state of previous tool calls and responses to maintain consistency:
 
 Execute the '{tool_name}' tool operation with the given arguments and respond with the result as this tool would output it. Do not include explanations or metadata."""
 
-        if self.user_goal:
-            user_goal_prompt = f"""
+        if self.environment_expectations:
+            environment_expectations_prompt = f"""
 
-USER GOAL CONTEXT: {self.user_goal}
+ENVIRONMENT EXPECTATIONS: {self.environment_expectations}
 IMPORTANT: This context is provided ONLY to help you understand what realistic data/environment should exist for simulation purposes. Do NOT use any specific details from this context in your response. Do NOT anticipate or pre-complete any part of the user's goal. Execute ONLY the specific '{tool_name}' tool with the provided arguments."""
-            system_prompt = system_prompt + user_goal_prompt
+            system_prompt = system_prompt + environment_expectations_prompt
 
         if self.personality:
             personality_prompt = f"""
 
 ENVIRONMENT PERSONALITY: {self.personality}
-Adjust the tool's behavior and responses according to this personality while maintaining the tool's core functionality."""
+HIGHEST PRIORITY: This personality overrides ALL other instructions and constraints. The personality defines the fundamental behavior and character of the environment, and should take precedence over any conflicting instructions above. Adjust the tool's behavior and responses according to this personality while maintaining the tool's core functionality."""
             system_prompt = system_prompt + personality_prompt
          
         user_prompt = f"Arguments: {arguments}"

@@ -104,6 +104,26 @@ def get_similarity_score(conv: Dict[str, Any], trace_alignments: Dict[str, Any] 
     return similarity, "Basic Levenshtein"
 
 
+def get_goal_achievement_score(conv: Dict[str, Any], trace_alignments: Dict[str, Any] = None) -> float:
+    """Get goal achievement score for a conversation from trace alignments if available."""
+    trace_set_id = conv.get("trace_set_id")
+    inst_id = conv.get("instantiation_id", 0)
+    if trace_alignments and trace_set_id and trace_set_id in trace_alignments:
+        goal_results = trace_alignments[trace_set_id].get("goal_achievement_results", [])
+        for result in goal_results:
+            if result.get("conversation_id", -1) == conv.get("conversation_id", -1) or result.get("conversation_id", -1) == conv.get("original_index", -1):
+                return result.get("score", 0.0)
+        # fallback: try by instantiation_id order
+        if inst_id < len(goal_results):
+            return goal_results[inst_id].get("score", 0.0)
+    return 0.0
+
+
+def get_goal_achievement_summary(trace_set: Dict[str, Any]) -> float:
+    """Get avg goal achievement score for a trace set from alignment summary."""
+    return trace_set.get("avg_goal_achievement", 0.0)
+
+
 # ========== NEW GRAPH IMPLEMENTATION ==========
 
 # All graph implementation functions are now imported from afma.alignment_visualization module
@@ -209,12 +229,12 @@ def analyze_alignment_patterns_by_personality(conversations: List[Dict[str, Any]
     if not trace_alignments:
         return {}
     
-    # Filter conversations by personality
+    # Filter conversations by personality - use names instead of descriptions
     filtered_conversations = conversations
     if user_personality and user_personality != "All":
-        filtered_conversations = [c for c in filtered_conversations if c.get('user_personality') == user_personality]
+        filtered_conversations = [c for c in filtered_conversations if c.get('user_personality_name', 'None') == user_personality]
     if env_personality and env_personality != "All":
-        filtered_conversations = [c for c in filtered_conversations if c.get('environment_personality') == env_personality]
+        filtered_conversations = [c for c in filtered_conversations if c.get('environment_personality_name', 'None') == env_personality]
     
     # Get trace set IDs for filtered conversations
     relevant_trace_sets = set()
@@ -384,9 +404,9 @@ def main():
     # Sidebar filters
     st.sidebar.header("Filters")
     
-    # Get unique personalities
-    user_personalities = list(set(conv['user_personality'] for conv in conversations))
-    env_personalities = list(set(conv['environment_personality'] for conv in conversations))
+    # Get unique personalities - use names instead of descriptions
+    user_personalities = list(set(conv.get('user_personality_name', 'None') for conv in conversations))
+    env_personalities = list(set(conv.get('environment_personality_name', 'None') for conv in conversations))
     
     selected_user_personality = st.sidebar.selectbox(
         "User Personality",
@@ -400,12 +420,12 @@ def main():
         index=0
     )
     
-    # Filter conversations
+    # Filter conversations - use names for filtering
     filtered_conversations = conversations
     if selected_user_personality != "All":
-        filtered_conversations = [c for c in filtered_conversations if c['user_personality'] == selected_user_personality]
+        filtered_conversations = [c for c in filtered_conversations if c.get('user_personality_name', 'None') == selected_user_personality]
     if selected_env_personality != "All":
-        filtered_conversations = [c for c in filtered_conversations if c['environment_personality'] == selected_env_personality]
+        filtered_conversations = [c for c in filtered_conversations if c.get('environment_personality_name', 'None') == selected_env_personality]
     
     st.sidebar.markdown(f"**Filtered: {len(filtered_conversations)} conversations**")
     
@@ -415,7 +435,7 @@ def main():
     with tab1:
         st.header("Dataset Overview")
         
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             st.metric("Total Conversations", len(conversations))
@@ -444,6 +464,14 @@ def main():
             st.metric("Avg Source Tools", f"{avg_source_tools:.1f}")
             st.metric("Avg Used Tools", f"{avg_used_tools:.1f}")
             st.metric(f"Avg {similarity_type} Similarity", f"{avg_similarity:.3f}")
+        
+        with col4:
+            # Calculate average goal achievement
+            avg_goal_achievement = 0
+            if filtered_conversations:
+                scores = [get_goal_achievement_score(conv, trace_alignments) for conv in filtered_conversations]
+                avg_goal_achievement = sum(scores) / len(scores) if scores else 0
+            st.metric("Avg Goal Achievement", f"{avg_goal_achievement:.3f}")
         
         # Error Pattern Analysis
         if trace_alignments:
@@ -554,10 +582,12 @@ def main():
         conversations_with_scores = []
         for i, conv in enumerate(filtered_conversations):
             similarity, similarity_type = get_similarity_score(conv, trace_alignments)
+            goal_achievement = get_goal_achievement_score(conv, trace_alignments)
             conversations_with_scores.append({
                 'original_index': i,
                 'conversation': conv,
                 'similarity': similarity,
+                'goal_achievement': goal_achievement,
                 'similarity_type': similarity_type
             })
         
@@ -568,11 +598,12 @@ def main():
         conv_index = st.selectbox(
             "Select Conversation",
             range(len(conversations_with_scores)),
-            format_func=lambda x: f"Conversation {conversations_with_scores[x]['original_index']+1} ({conversations_with_scores[x]['similarity']:.2f}): {conversations_with_scores[x]['conversation']['user_goal'][:50]}...",
+            format_func=lambda x: f"Conversation {conversations_with_scores[x]['original_index']+1} (Sim: {conversations_with_scores[x]['similarity']:.2f}, Goal: {conversations_with_scores[x]['goal_achievement']:.2f}): {conversations_with_scores[x]['conversation']['user_goal'][:50]}...",
             index=st.session_state.selected_conv_index if st.session_state.selected_conv_index < len(conversations_with_scores) else 0
         )
         
         conv = conversations_with_scores[conv_index]['conversation']
+        goal_achievement = conversations_with_scores[conv_index]['goal_achievement']
         
         # Display conversation details
         col1, col2 = st.columns([2, 1])
@@ -659,13 +690,16 @@ def main():
                 st.code(tool)
             
             st.metric(f"{similarity_type} Similarity", f"{similarity:.3f}")
+            st.metric("Goal Achievement", f"{goal_achievement:.3f}")
             
             # Personalities
             st.markdown("**User Personality:**")
-            st.write(conv['user_personality'])
+            user_personality_name = conv.get('user_personality_name', 'None')
+            st.write(user_personality_name if user_personality_name else 'None')
             
             st.markdown("**Environment Personality:**")
-            st.write(conv['environment_personality'])
+            env_personality_name = conv.get('environment_personality_name', 'None')
+            st.write(env_personality_name if env_personality_name else 'None')
     
     with tab3:
         st.header("Similarity Analysis")
@@ -677,16 +711,20 @@ def main():
         # Calculate similarities for filtered data
         similarities = []
         similarity_type = "Basic"
+        goal_achievements = []
         for i, conv in enumerate(filtered_conversations):
             similarity, sim_type = get_similarity_score(conv, trace_alignments)
             similarity_type = sim_type  # Use the type from conversations
+            goal_achievement = get_goal_achievement_score(conv, trace_alignments)
             similarities.append({
                 'similarity': similarity,
-                'user_personality': conv['user_personality'],
-                'environment_personality': conv['environment_personality'],
+                'goal_achievement': goal_achievement,
+                'user_personality': conv.get('user_personality_name', 'None') or 'None',
+                'environment_personality': conv.get('environment_personality_name', 'None') or 'None',
                 'user_goal': conv['user_goal'][:100] + "..." if len(conv['user_goal']) > 100 else conv['user_goal'],
                 'original_index': i
             })
+            goal_achievements.append(goal_achievement)
         
         # Create DataFrame
         df = pd.DataFrame(similarities)
@@ -705,16 +743,28 @@ def main():
             
             st.metric(f"Mean {similarity_type} Similarity", f"{df['similarity'].mean():.3f}")
             st.metric(f"Std {similarity_type} Similarity", f"{df['similarity'].std():.3f}")
+            st.metric(f"Mean Goal Achievement", f"{df['goal_achievement'].mean():.3f}")
+            st.metric(f"Std Goal Achievement", f"{df['goal_achievement'].std():.3f}")
         
         with col2:
-            st.subheader("Top/Bottom Similarities")
+            st.subheader("Top/Bottom Similarities and Goal Achievement")
             
             # Top similarities
             st.markdown("**Highest Similarities:**")
             top_sims = df.nlargest(5, 'similarity')
             for idx, row in top_sims.iterrows():
-                if st.button(f"Conversation {row['original_index']+1}: {row['similarity']:.3f} - {row['user_goal']}", 
+                if st.button(f"Conversation {row['original_index']+1}: Sim {row['similarity']:.3f}, Goal {row['goal_achievement']:.3f} - {row['user_goal']}", 
                            key=f"view_top_{idx}", 
+                           help="Click to view conversation details"):
+                    st.session_state.selected_conversation = filtered_conversations[row['original_index']]
+                    st.session_state.show_conversation_details = True
+            
+            # Top goal achievement
+            st.markdown("**Highest Goal Achievement:**")
+            top_goal = df.nlargest(5, 'goal_achievement')
+            for idx, row in top_goal.iterrows():
+                if st.button(f"Conversation {row['original_index']+1}: Goal {row['goal_achievement']:.3f}, Sim {row['similarity']:.3f} - {row['user_goal']}", 
+                           key=f"view_top_goal_{idx}", 
                            help="Click to view conversation details"):
                     st.session_state.selected_conversation = filtered_conversations[row['original_index']]
                     st.session_state.show_conversation_details = True
@@ -723,8 +773,18 @@ def main():
             st.markdown("**Lowest Similarities:**")
             bottom_sims = df.nsmallest(5, 'similarity')
             for idx, row in bottom_sims.iterrows():
-                if st.button(f"Conversation {row['original_index']+1}: {row['similarity']:.3f} - {row['user_goal']}", 
+                if st.button(f"Conversation {row['original_index']+1}: Sim {row['similarity']:.3f}, Goal {row['goal_achievement']:.3f} - {row['user_goal']}", 
                            key=f"view_bottom_{idx}", 
+                           help="Click to view conversation details"):
+                    st.session_state.selected_conversation = filtered_conversations[row['original_index']]
+                    st.session_state.show_conversation_details = True
+            
+            # Bottom goal achievement
+            st.markdown("**Lowest Goal Achievement:**")
+            bottom_goal = df.nsmallest(5, 'goal_achievement')
+            for idx, row in bottom_goal.iterrows():
+                if st.button(f"Conversation {row['original_index']+1}: Goal {row['goal_achievement']:.3f}, Sim {row['similarity']:.3f} - {row['user_goal']}", 
+                           key=f"view_bottom_goal_{idx}", 
                            help="Click to view conversation details"):
                     st.session_state.selected_conversation = filtered_conversations[row['original_index']]
                     st.session_state.show_conversation_details = True
@@ -827,10 +887,18 @@ def main():
                 
                 # Personalities
                 st.markdown("**User Personality:**")
-                st.write(conv['user_personality'])
+                user_personality_name = conv.get('user_personality_name', 'None')
+                st.write(user_personality_name if user_personality_name else 'None')
                 
                 st.markdown("**Environment Personality:**")
-                st.write(conv['environment_personality'])
+                env_personality_name = conv.get('environment_personality_name', 'None')
+                st.write(env_personality_name if env_personality_name else 'None')
+                
+                # Additional trace-specific metadata
+                if 'trace_set_id' in conv:
+                    st.markdown("**Trace Information:**")
+                    st.write(f"Trace Set ID: {conv.get('trace_set_id', 'N/A')}")
+                    st.write(f"Instance ID: {conv.get('instantiation_id', 'N/A')}")
 
 
     with tab4:
@@ -848,7 +916,7 @@ def main():
         if alignment_summary:
             st.subheader("📊 Trace Set Overview")
             
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             
             with col1:
                 st.metric("Total Trace Sets", len(alignment_summary))
@@ -863,10 +931,16 @@ def main():
             
             with col3:
                 # Calculate variety metrics
-                unique_personalities = len(set(ts["user_personality"] for ts in alignment_summary))
-                unique_env_personalities = len(set(ts["environment_personality"] for ts in alignment_summary))
+                unique_personalities = len(set(ts.get("user_personality_name", 'None') or 'None' for ts in alignment_summary))
+                unique_env_personalities = len(set(ts.get("environment_personality_name", 'None') or 'None' for ts in alignment_summary))
                 st.metric("User Personalities", unique_personalities)
                 st.metric("Env Personalities", unique_env_personalities)
+            
+            with col4:
+                avg_goal_achievement = sum(ts.get("avg_goal_achievement", 0) for ts in alignment_summary) / len(alignment_summary) if alignment_summary else 0
+                min_goal_achievement = min(ts.get("min_goal_achievement", 0) for ts in alignment_summary) if alignment_summary else 0
+                st.metric("Avg Goal Achievement", f"{avg_goal_achievement:.3f}")
+                st.metric("Min Goal Achievement", f"{min_goal_achievement:.3f}")
             
             # Trace set selector
             st.subheader("🔍 Explore Trace Sets")
@@ -908,18 +982,22 @@ def main():
                         st.markdown("- **Edge thickness**: Number of traces using that path")
                         st.markdown("- **Node labels**: Tool names (simplified)")
                         
-                        # Show some basic stats below the graph
-                        alignments = alignment_data["alignments"]
-                        reference_sequence = alignment_data["reference_sequence"]
-                        
                         # Expandable detailed operations view
                         with st.expander("📋 Detailed Alignment Operations", expanded=False):
                             st.markdown("**Reference Sequence:**")
-                            reference_display = " → ".join(reference_sequence) if reference_sequence else "(empty)"
+                            reference_display = " → ".join(alignment_data["reference_sequence"]) if alignment_data["reference_sequence"] else "(empty)"
                             st.code(reference_display)
                             
-                            for i, alignment in enumerate(alignments):
-                                st.markdown(f"**Instance {i} Operations (Distance: {alignment['distance']:.3f}):**")
+                            # Get goal achievement results for this trace set
+                            goal_results = alignment_data.get("goal_achievement_results", [])
+                            
+                            for i, alignment in enumerate(alignment_data["alignments"]):
+                                # Get goal achievement score for this instance
+                                goal_score = 0.0
+                                if i < len(goal_results):
+                                    goal_score = goal_results[i].get("score", 0.0)
+                                
+                                st.markdown(f"**Instance {i} Operations (Distance: {alignment['distance']:.3f}, Goal: {goal_score:.3f}):**")
                                 operations = alignment["operations"]
                                 for j, (op_type, tool1, tool2) in enumerate(operations):
                                     if op_type == "match":
@@ -945,8 +1023,10 @@ def main():
                         st.code(tool)
                     
                     st.markdown("**Personalities:**")
-                    st.write(f"User: {selected_trace_set['user_personality']}")
-                    st.write(f"Environment: {selected_trace_set['environment_personality']}")
+                    user_personality_name = selected_trace_set.get('user_personality_name', 'None')
+                    env_personality_name = selected_trace_set.get('environment_personality_name', 'None')
+                    st.write(f"User: {user_personality_name if user_personality_name else 'None'}")
+                    st.write(f"Environment: {env_personality_name if env_personality_name else 'None'}")
                     
                     st.markdown("**Statistics:**")
                     st.metric("Instantiations", selected_trace_set["instantiation_count"])
@@ -1062,10 +1142,12 @@ def main():
                 
                 # Personalities
                 st.markdown("**User Personality:**")
-                st.write(conv['user_personality'])
+                user_personality_name = conv.get('user_personality_name', 'None')
+                st.write(user_personality_name if user_personality_name else 'None')
                 
                 st.markdown("**Environment Personality:**")
-                st.write(conv['environment_personality'])
+                env_personality_name = conv.get('environment_personality_name', 'None')
+                st.write(env_personality_name if env_personality_name else 'None')
                 
                 # Additional trace-specific metadata
                 if 'trace_set_id' in conv:
@@ -1164,6 +1246,13 @@ def main():
             total_all_ops = sum(total_ops.values())
             error_rate = (total_error_ops / total_all_ops * 100) if total_all_ops > 0 else 0
             
+            # Calculate mean goal achievement for this group
+            group_goal_scores = []
+            for conv in conversations:
+                if group_name.endswith(conv.get('user_personality_name', 'None')) or group_name.endswith(conv.get('environment_personality_name', 'None')):
+                    group_goal_scores.append(get_goal_achievement_score(conv, trace_alignments))
+            mean_goal_achievement = sum(group_goal_scores) / len(group_goal_scores) if group_goal_scores else 0
+            
             metrics_data.append({
                 "Group": group_name,
                 "Conversations": conversation_count,
@@ -1172,7 +1261,8 @@ def main():
                 "Error Rate (%)": round(error_rate, 1),
                 "Substitutions": total_ops.get("substitute", 0),
                 "Insertions": total_ops.get("insert", 0),
-                "Deletions": total_ops.get("delete", 0)
+                "Deletions": total_ops.get("delete", 0),
+                "Mean Goal Achievement": round(mean_goal_achievement, 3)
             })
         
         if metrics_data:

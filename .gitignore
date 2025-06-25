@@ -2,6 +2,7 @@
 .log
 .DS_Store
 .env
+.litellm_cache/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

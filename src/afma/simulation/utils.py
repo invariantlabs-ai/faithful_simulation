@@ -38,6 +38,9 @@ async def get_tools_from_mcp_config(mcp_config_path: str, timeout: int) -> List[
 
                 for tool in tools_from_server:
                     tool_dict = tool.model_dump()
+                    tool_dict["server"] = server_name
+                    tool_dict["original_name"] = tool_dict["name"]
+                    tool_dict["name"] = f"{server_name}_{tool_dict['name']}"
                     all_tools.append(tool_dict)
 
                 if tools_from_server:

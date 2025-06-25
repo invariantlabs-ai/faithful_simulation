@@ -1,49 +1,14 @@
-from typing import Any, Dict, List, Optional, Protocol
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
+from typing import Any, Dict, List
 import litellm
 from loguru import logger
-import hashlib
-import json
-import math
 from scipy.special import softmax
 from scipy.spatial.distance import cosine
 
-
-@dataclass
-class EvaluationResult:
-    """Result of an evaluation metric."""
-    metric_name: str
-    score: float
-    details: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
+from .base import EvaluationResult
+from ..severety_assessor import SideEffectSeverityAssessor
 
 
-class EvaluationMetric(ABC):
-    """Abstract base class for evaluation metrics."""
-    
-    @abstractmethod
-    async def evaluate(self, 
-                      user_goal: str, 
-                      user_source: List[Dict[str, str]], 
-                      execution_trace: List[Dict[str, Any]], 
-                      used_tools: List[str]) -> EvaluationResult:
-        """
-        Evaluate a single conversation trace.
-        
-        Args:
-            user_goal: The original user goal/request
-            user_source: The expected tool sequence from user generation
-            execution_trace: Full conversation history including tool calls
-            used_tools: List of tool names that were actually used
-            
-        Returns:
-            EvaluationResult with score and details
-        """
-        pass
-
-
-class WeightedLevenshteinMetric(EvaluationMetric):
+class WeightedLevenshteinMetric:
     """
     Weighted Levenshtein Distance metric that uses semantic similarity between tools.
     
@@ -55,9 +20,7 @@ class WeightedLevenshteinMetric(EvaluationMetric):
                  tool_definitions: Dict[str, Dict[str, Any]],
                  embedding_config: Dict[str, Any],
                  similarity_threshold: float = 0.8,
-                 cache_embeddings: bool = True,
-                 temperature: float = 0.05,
-                 consecutive_duplicate_penalty: float = 0.2):
+                 temperature: float = 0.05):
         """
         Initialize the weighted Levenshtein metric.
         
@@ -65,21 +28,15 @@ class WeightedLevenshteinMetric(EvaluationMetric):
             tool_definitions: Dict mapping tool names to their definitions
             embedding_config: Configuration for litellm embedding calls
             similarity_threshold: Threshold above which tools are considered similar
-            cache_embeddings: Whether to cache embeddings for efficiency
             temperature: Temperature parameter for softmax normalization
-            consecutive_duplicate_penalty: Penalty for consecutive duplicate tool insertions
         """
         self.metric_name = "weighted_levenshtein"
         self.tool_definitions = tool_definitions
         self.embedding_config = embedding_config
         self.similarity_threshold = similarity_threshold
-        self.cache_embeddings = cache_embeddings
         self.temperature = temperature
-        self.consecutive_duplicate_penalty = consecutive_duplicate_penalty
-        
-        # Cache for embeddings and similarity scores
-        self._embedding_cache: Dict[str, List[float]] = {}
-        self._similarity_cache: Dict[tuple, float] = {}
+
+        self.side_effect_severity_assessor = SideEffectSeverityAssessor(embedding_config)
     
     async def evaluate(self, 
                       user_goal: str, 
@@ -138,10 +95,6 @@ class WeightedLevenshteinMetric(EvaluationMetric):
         if tool1 == tool2:
             return 1.0
         
-        cache_key = tuple(sorted([tool1, tool2]))
-        if cache_key in self._similarity_cache:
-            return self._similarity_cache[cache_key]
-        
         try:
             query_embedding = await self._get_tool_embedding(tool1)
             
@@ -159,9 +112,6 @@ class WeightedLevenshteinMetric(EvaluationMetric):
             tool2_index = all_tools.index(tool2)
             similarity = normalized_similarities[tool2_index]
             
-            if self.cache_embeddings:
-                self._similarity_cache[cache_key] = similarity
-            
             return similarity
             
         except Exception as e:
@@ -170,11 +120,8 @@ class WeightedLevenshteinMetric(EvaluationMetric):
     
     async def _get_tool_embedding(self, tool_name: str) -> List[float]:
         """
-        Get embedding for a tool, using cache if available.
+        Get embedding for a tool.
         """
-        if self.cache_embeddings and tool_name in self._embedding_cache:
-            return self._embedding_cache[tool_name]
-        
         tool_text = self._format_tool_for_embedding(tool_name)
         
         response = await litellm.aembedding(
@@ -184,16 +131,9 @@ class WeightedLevenshteinMetric(EvaluationMetric):
         
         embedding = response.data[0]["embedding"]
         
-        if self.cache_embeddings:
-            self._embedding_cache[tool_name] = embedding
-        
         return embedding
     
     def _format_tool_for_embedding(self, tool_name: str) -> str:
-        """
-        Format tool information for embedding generation.
-        Similar to _format_tool_information but for a single tool.
-        """
         if tool_name not in self.tool_definitions:
             logger.warning(f"Tool {tool_name} not found in definitions, using name only")
             return tool_name
@@ -215,6 +155,11 @@ class WeightedLevenshteinMetric(EvaluationMetric):
                     formatted += f"\n- {param_name}: {param_description}"
         
         return formatted
+    
+    async def _get_tool_side_effect_severity(self, tool_name: str) -> float:
+        tool_text = self._format_tool_for_embedding(tool_name)
+        result = await self.side_effect_severity_assessor.assess_severity(tool_text)
+        return result[0]
 
     async def get_optimal_alignment(self, seq1: List[str], seq2: List[str]) -> Dict[str, Any]:
         """
@@ -281,15 +226,7 @@ class WeightedLevenshteinMetric(EvaluationMetric):
                     substitution_cost = 1.0 - similarity
                     
                     deletion_cost = dp[i-1][j] + 1.0
-                    
-                    # Calculate insertion cost with reduced penalty for consecutive duplicates
-                    # Check if current tool in seq2 is same as previous tool in seq2
-                    if j >= 2 and seq2[j-1] == seq2[j-2]:
-                        # Consecutive duplicate gets reduced penalty
-                        insertion_cost = dp[i][j-1] + self.consecutive_duplicate_penalty
-                    else:
-                        # First occurrence or non-consecutive gets full penalty
-                        insertion_cost = dp[i][j-1] + 1.0
+                    insertion_cost = dp[i][j-1] + await self._get_tool_side_effect_severity(seq2[j-1])
                     
                     substitution_total_cost = dp[i-1][j-1] + substitution_cost
                     
