@@ -98,6 +98,7 @@ To enable the comprehensive evaluation, we plan to follow the approach in the fi
 26. [Terminal-Bench](https://www.tbench.ai/about)
 27. [Darwin Gödel Machine:
 Open-Ended Evolution of Self-Improving Agents](https://arxiv.org/pdf/2505.22954)
+28. [Estimating Correctness Without Oracles in LLM-Based Code Generation](https://arxiv.org/pdf/2507.00057)
 
 ## Notes
 Always use uv and pyproject.toml for package and dependencies management.

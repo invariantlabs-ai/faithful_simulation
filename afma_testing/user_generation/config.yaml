@@ -1,0 +1,42 @@
+# User Generation Testing Configuration
+
+# Path to MCP configuration file
+mcp_config_path: "agent_mcp_configs/complex_agent.json"
+
+user_generation_testing:
+  # LLM configuration for user generation
+  generation_litellm:
+    model: gpt-4.1-mini
+    temperature: 0.3
+    top_p: 0.9
+    timeout: 30
+    caching: true
+  
+  # LLM configuration for assessment
+  assessment_litellm:
+    model: gpt-4.1-mini
+    temperature: 0.1
+    top_p: 0.9
+    timeout: 30
+    caching: true
+  
+  # Test parameters
+  test:
+    max_concurrent_users: 20
+    results_output_dir: "results/user_generation_testing"
+    
+  # User generation parameters
+  user_generation:
+    permutation_lengths: [3, 5, 10]
+    max_users_per_length: 15
+    semaphore_limit: 20
+    
+  # Assessment parameters
+  assessment:
+    environment_completeness:
+      enabled: true
+      scoring_threshold: 0.7
+    goal_unambiguity:
+      enabled: true
+      scoring_threshold: 0.8
+    concurrency: 20

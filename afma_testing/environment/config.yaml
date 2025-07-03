@@ -1,0 +1,35 @@
+# Environment testing configuration
+environment_testing:
+  litellm:
+    model: gpt-4.1-mini
+    temperature: 0.3
+    top_p: 0.9
+    timeout: 30
+    caching: true
+  
+  # Test parameters
+  test:
+    max_file_content_length: 500
+    cleanup_after_test: true
+    max_concurrent_tests: 20
+    results_output_dir: "results/environment_testing"
+    
+  # Grid testing parameters
+  grid_testing:
+    file_counts: [5, 10, 20]
+    task_complexities: [5, 10, 20]
+    runs_per_config: 5
+    
+  # State generation parameters
+  state_generation:
+    file_types: ["txt", "md", "py", "js", "json", "yaml"]
+    content_themes: ["documentation", "code", "data", "configuration"]
+    
+  # Task generation parameters
+  task_generation:
+    task_types: ["file_management", "content_analysis", "organization", "search_and_modify"]
+    
+  # Comparison parameters
+  comparison:
+    similarity_threshold: 0.8
+    detailed_reporting: true 

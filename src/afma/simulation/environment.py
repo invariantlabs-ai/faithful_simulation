@@ -89,7 +89,8 @@ class Environment(EnvironmentInterface):
                         tool_list = (await session.list_tools()).tools
                         tool_list = [
                             {
-                                "name": f"{server_name}_{tool.name}",
+                                # Only one server prefix, not duplicated
+                                "name": f"{server_name}_{tool.name}" if not tool.name.startswith(f"{server_name}_") else tool.name,
                                 "description": tool.description,
                                 "inputSchema": tool.inputSchema
                             }
@@ -107,16 +108,20 @@ class Environment(EnvironmentInterface):
         return self.tools
 
     async def call_tool(self, tool_name: str, arguments: str, tool_call_id: str) -> tuple[str, str]:
-        """Create a new session just for this tool call and close it properly"""
-        server_idx = self.server_by_tool_name[tool_name]
-        server_name = list(self.server_configs.keys())[server_idx]
+        """Call a tool with the given arguments, using server name from tool_name."""
+        # Split tool_name into server and actual tool name
+        if '_' not in tool_name:
+            return tool_call_id, f"Error: Tool name '{tool_name}' does not contain server prefix."
+        server_name, actual_tool_name = tool_name.split('_', 1)
+        if server_name not in self.server_configs:
+            return tool_call_id, f"Error: Server '{server_name}' not found in server configs."
         server_config = self.server_configs[server_name]
 
         async with get_client(server_config, self.timeout) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 try:
-                    response = await session.call_tool(tool_name, arguments=json.loads(arguments))
+                    response = await session.call_tool(actual_tool_name, arguments=json.loads(arguments))
                     if response.isError:
                         return tool_call_id, f"Error calling tool {tool_name} with arguments: {arguments}: {response}"
                     results = []
@@ -177,6 +182,7 @@ STRICT REQUIREMENTS:
 - Simulate ONLY the tool named '{tool_name}', not any other tool
 - Use ONLY information from the provided arguments, no external context
 - Do not perform actions beyond what this specific tool is designed to do
+- If tool parameters make no sense, for example user is trying to create a file in a directory that doesn't exist according to environment state, you should return an error
 
 Here is the state of previous tool calls and responses to maintain consistency:
 {json.dumps(self.state, indent=2)}

@@ -4,7 +4,7 @@
             "args": [
                 "-y",
                 "@modelcontextprotocol/server-filesystem",
-                "~/Desktop/"
+                "file_playground/"
             ],
             "command": "npx"
         }
