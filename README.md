@@ -3,6 +3,64 @@
 ## Overview
 AI agents are becoming increasingly capable, yet remain error-prone and challenging to trust in real-world high-stakes applications. They often misinterpret user intent, behave unpredictably in complex workflows, and fail under ambiguous task specifications. Without a structured understanding of these failure modes, production deployment remains risky and ad hoc. In this project, we aim to provide this structured understanding via a systematic testing and simulation approach. Knowing the tools available to an agent, we can simulate both user input and tool output that explores error-prone and unsafe edge-cases.
 
+## Two-pager
+Testing AI agents in complex, high-stakes scenarios is a major challenge. Current methods are often insufficient. Manual testing by human users is slow, expensive, and difficult to scale, while static analysis of an agent's tools can reveal potential vulnerabilities but fails to capture the emergent, unpredictable errors that arise from the agent's own behavior and its interaction with a dynamic environment.
+
+This project introduces a third approach: **agent failure mode analysis through automated user simulation**. We propose a framework that systematically tests an agent by simulating conversations between the agent and a variety of simulated users within a simulated environment. This allows for rapid, scalable, and reproducible testing that can uncover failure modes missed by other methods.
+
+The framework is designed to be agent-agnostic. Given only the definition of an agent's toolset (via an MCP config file), it orchestrates an end-to-end evaluation pipeline. It begins by automatically generating realistic user goals and initial environment states. It then simulates the entire interaction—a user pursuing their goal, an agent using its tools, and an environment responding to those actions. Finally, it evaluates the agent's performance on two levels: whether it achieved the user's goal (the outcome) and whether its process for getting there was logical and safe (the execution path). By programmatically varying user and environment "personalities" (e.g., a buggy environment or an impatient user), we can efficiently explore a wide range of challenging, edge-case conditions.
+
+### Key Contributions
+1.  **A fully automated framework** for testing AI agents through end-to-end user and environment simulation, requiring only the agent's tool descriptions as input.
+2.  **Novel user goal generation** that creates diverse and realistic test scenarios by first modeling tool relationships as a graph and then generating tasks based on logical paths within that graph.
+3.  **A comprehensive evaluation suite** to measure both the simulation's validity and the agent's performance, including:
+    *   Metrics to ensure simulated users and environments behave realistically.
+    *   A `WeightedLevenshteinMetric` to assess the correctness and safety of the agent's tool-use sequence.
+    *   A `GoalAchievementMetric` that uses an LLM-as-a-judge to evaluate if the final outcome satisfied the user's intent.
+
+### Components of the system
+The system has the following components:
+
+1. **User Goal Generation (`src/afma/simulation/user.py`)**: This is the starting point of the simulation pipeline. Instead of manually writing test cases, this component automatically generates a diverse set of user goals based on the agent's capabilities (i.e., its tools) similarly to how fuzzing works for code testing.
+    - **Tool Relationship Graph**: The process begins by creating a directed graph of tool relationships. An LLM analyzes the entire toolset and determines which tools logically follow others in realistic user workflows (e.g., `read_file` is often followed by `edit_file`). This creates a map of sensible tool sequences.
+    - **Generating Scenarios**: By traversing this graph, the system generates "reasonable tool sequences" of varying lengths. For each sequence, an LLM then crafts a natural language **user goal** and a corresponding **initial environment state**. These two are kept separate to avoid biasing the environment.
+    - **User Personalities**: The system can also assign "personalities" to users (e.g., "concise," "talkative," "german-speaking"). These personalities are instructions that modify the user simulation LLM's behavior, allowing the agent to be tested against various interaction styles.
+
+2. **Simulated Environment (`src/afma/simulation/environment.py`)**: This component plays the role of the world the agent interacts with. While the framework can connect to real environments (e.g., a real filesystem or API), its power lies in simulation.
+    - **LLM-Powered Simulation**: The `SimulatedEnvironment` uses an LLM to simulate the output of tool calls. It takes the tool name and arguments from the agent and asks an LLM to generate a realistic output.
+    - **Stateful and Consistent**: The simulation is stateful. It maintains a history of all tool calls and their results within a session. This history is fed back into the simulation LLM for subsequent calls, ensuring consistency (e.g., a file created in one step can be read in a later step).
+    - **Environment Personalities**: Similar to users, environments can have "personalities" to test agent robustness. These can simulate non-ideal conditions like a "buggy" environment that returns random errors, a "rate-limited" environment that fails intermittently, or even an "adversarial" one.
+
+3. **User Simulation (`src/afma/simulation/user.py`)**: The `User` class drives the conversation with the agent.
+    - **LLM-driven Dialogue**: The user is an LLM agent whose behavior is guided by a detailed system prompt. This prompt instructs the user to pursue their generated goal, to avoid accepting out-of-scope suggestions from the agent, and to be persistent in the face of errors.
+    - **Goal Adherence**: This strict guidance ensures the simulation is a valid test of the agent's ability to complete a specific task, rather than a free-form chat. The user knows to terminate the conversation once the goal is met.
+
+4. **Agent (`src/afma/simulation/agent.py`)**: The framework includes a standard, tool-calling `Agent`.
+    - **Standard Architecture**: The agent follows a typical loop: it receives a user message, calls an LLM to decide on actions (i.e., tool calls), executes those calls against the environment (real or simulated), and then uses the results to either call more tools or formulate a response to the user.
+    - **Environment-Agnostic**: The agent is designed to work with any environment that conforms to the `EnvironmentInterface`, meaning the same agent code can be run against a real or a simulated environment without modification.
+
+### Simulation Reasonability and Evaluation
+A key challenge in simulation is ensuring it is a meaningful proxy for reality. This framework includes several mechanisms and metrics to evaluate the simulation's validity and the agent's performance.
+
+1. **User Goal Reasonability & Trace Alignment**: How do we know the generated user goals are realistic? We measure this by comparing the *planned* tool sequence (generated during user goal creation) with the *actual* tool sequence executed by the agent.
+    - **`WeightedLevenshteinMetric` (`src/afma/evaluation/metrics/weighted_levenshtein.py`)**: This is a sophisticated alignment metric. It doesn't just count differences; it "weighs" them.
+        - **Semantic Substitution Cost**: Substituting a tool with a semantically similar one (e.g., `create_file` for `touch_file`) has a low cost. The similarity is calculated using text embeddings of the tools' descriptions.
+        - **Side-Effect Severity Cost**: Inserting an unexpected tool is penalized based on its potential for harm. A custom `SideEffectSeverityAssessor` uses an LLM to rate tools, so inserting a destructive tool like `delete_repository` is far more "expensive" than inserting `list_files`.
+    - The final output is a similarity score (e.g., 96% alignment), which indicates how closely the agent's execution path matched the logical path of the user's goal.
+
+2. **User Adherence to Goal**: We need to verify that the simulated user is behaving as instructed.
+    - **LLM-as-a-Judge (`afma_testing/user_goal_adherence/run_user_goal_adherence_test.py`)**: A separate test pipeline extracts all user messages from simulated traces and uses an LLM to assess if the user adhered to their original goal without scope creep. Our experiments show ~99.6% adherence.
+
+3. **Environment Simulation Fidelity**: Does the simulated environment behave like a real one?
+    - **Real vs. Simulated Test (`afma_testing/environment/run_test.py`)**: We test this by running the same sequence of tool calls in a real environment (e.g., the local filesystem) and a simulated one. We then compare the final states of both environments (e.g., file contents). For reasonably complex scenarios, we observe high similarity (~90%), confirming the viability of the LLM-based simulation.
+
+### Results and Goal Achievement
+The ultimate measure of an agent's success is whether it accomplishes the user's goal.
+
+- **`GoalAchievementMetric` (`src/afma/evaluation/metrics/goal_achievement.py`)**: This metric uses an LLM-as-a-judge to provide a final verdict. It looks at the initial environment state, the user's goal, and the final environment state after the simulation and determines to what extent the goal was achieved. This is an outcome-focused metric; it doesn't care *how* the agent did it, only *if* it succeeded. The result is a score from 0.0 to 1.0.
+
+By combining these components, this framework provides a powerful, automated way to analyze agent failure modes across a wide range of tasks and conditions before deployment.
+
 ## Installation
 
 ```bash
@@ -13,61 +71,6 @@ cd afma
 # Install dependencies using uv
 uv sync
 ```
-
-## How to Use
-
-The `afma` command-line tool provides several utilities for agent testing and simulation:
-
-### Scanning Agent Tool Configurations
-
-To scan an MCP agent configuration and extract its toolset:
-
-```bash
-afma scan-mcp agent_mcp_configs/claude_desktop_config.json -o results/toolset.json
-```
-
-This command analyzes the agent configuration and outputs the detected toolset to a JSON file.
-
-### Creating Simulated User Inputs
-
-Generate simulated user inputs for testing:
-
-```bash
-afma create-users agent_mcp_configs/claude_desktop_config.json litellm_configs/o4-mini.json results/users.json -m 3 --max-users-per-len 10
-```
-
-This command:
-- Uses the provided agent configuration and LiteLLM config
-- Simulates user tasks with maximum tool sequence length of 3
-- Creates up to 10 users per tool sequence length
-- Saves the results to `results/users.json`
-
-## This Project
-In this project, we plan to address that gap by simulating diverse user-agent interactions to uncover, categorize, and evaluate agent failures systematically. We focus on building the foundations for scalable, automated failure mode analysis - reducing reliance on manual testing or reactive fixes after deployment. Concretely, we focus on four key objectives:
-
-- **Identify Failure Modes**: Uncover common and edge-case agent errors, such as tool misuse, misinterpretation, and unstable behavior across varying task conditions [5, 9].
-- **Measure Robustness**: Analyze how agent reliability changes as tasks grow in complexity or ambiguity, drawing from ideas in [4, 10].
-- **Simulate High-Risk Behavior Safely**: Detect potentially harmful behavior (e.g., executing dangerous commands) through controlled simulations inspired by [1, 2, 8].
-- **Provide a Scalable Testing Framework**: Build a foundation for automated agent testing and auditing, supporting safe iteration in development [3, 7, 12].
-
-To enable the comprehensive evaluation, we plan to follow the approach in the figure below. As a first step, we plan to build a User Simulation System (blue, yellow in the figure) that generates tool-aware user requests aiming to trigger the agent to execute predefined tool interactions and sequences ([5, 10]). Building on this, we plan to make the user simulation variable in user specificity, task structure, ambiguity, and other (possible) failure causes. We aim to quantify the overall agent robustness over these factors and task complexities [4, 6, 9]. To enable testing of dangerous behaviors (e.g., tools with destructive impact on the environment like rm, spending money, sending email to real addresses), we plan to introduce a simulation layer for such tools [2]. On the implementation side, we plan to abstract this behavior behind an MCP server [11], which can multiplex between the actual and simulated tools.
-
-![Project approach diagram](illustration.png)
-
-## Milestones
-- Ramp-up and Reading (0.5 months)
-- Core Technical Work (2.5 months)
-  - Agent-Specific User Simulation
-    - for fixed agents, simulate user-flows that reach various tool interactions
-  - User Simulation with Scenario Diversity
-    - make user input generation work for various agents
-    - introduce nuance, variation and ambiguity to tasks and user requests
-  - Safe Simulation of Tools
-    - use LLM-driven simulation of unsafe tools
-  - Large-scale evaluation
-    - Quantitatively compare agent outputs with ground-truth traces
-    - Identify robustness gaps and security vulnerabilities
-    - Write-up, potential paper submission, open benchmark (1 month)
 
 ## References
 1. [ToolFuzz](https://arxiv.org/pdf/2503.04479)

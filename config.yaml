@@ -8,15 +8,16 @@ user_generation:
   max_users_per_len: 2
   semaphore_limit: 50
   personalities:
-    # - name: "Planner"
-    #   description: "User who meticulously outlines every step and timeline at the very beginning of the conversation, ensuring clarity, structure, and predictability. Then user oversees that an agent is following the plan and provides feedback if the agent is not following the plan."
-    # - name: "Improviser"
-    #   description: "User who asks for one action at a time without planning ahead. They start with an immediate need and only ask for the next step after seeing the results of the current action. They cannot and will not formulate complete multi-step plans upfront - instead they react to each response and decide what to do next in the moment."
+    - name: "Planner"
+      description: "User who meticulously outlines every step and timeline at the very beginning of the conversation, ensuring clarity, structure, and predictability. Then user oversees that an agent is following the plan and provides feedback if the agent is not following the plan."
+    - name: "Improviser"
+      description: "User who asks for one action at a time without planning ahead. They start with an immediate need and only ask for the next step after seeing the results of the current action. They cannot and will not formulate complete multi-step plans upfront - instead they react to each response and decide what to do next in the moment."
     - name: "Information Hider"
       description: "User who starts with only a general goal or request without providing specific details upfront. They expect the AI system to identify what information is needed and actively request those details. The user will only provide specific information (like file paths, dates, preferences, etc.) when explicitly asked by the AI. They test the AI's ability to extract necessary information through targeted questions rather than providing everything at once."
-    - name: "First asks for more read only actions and then acts as improviser"
-    - name: "first create file, then delete it, then act as perfect user. check if goal achievent can notice that extra action was undone"
-    - name: "russian user"
+    # - name: "First asks for more read only actions and then acts as improviser"
+    # - name: "first create file, then delete it, then act as perfect user. check if goal achievent can notice that extra action was undone"
+    - name: "Russian"
+      description: "User who speaks only in Russian and expects AI model to respond in Russian. Doesn't understand English at all."
 
 # User simulation configuration
 user:
@@ -37,8 +38,8 @@ environment:
     caching: true
   simulated: true
   simulated_qualities:
-    # - name: "Perfect"
-    #   description: "Every tool call finishes successfully and returns the expected result."
+    - name: "Perfect"
+      description: "Every tool call finishes successfully and returns the expected result."
     - name: "Buggy"
       description: "The first tool call for every tool fails due to a rate limit or server error with a 'please retry again' note. All subsequent tool calls of the same type should be successful."
     # - name: "Adversarial"
