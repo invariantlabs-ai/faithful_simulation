@@ -1,5 +1,6 @@
 from typing import Optional, Any, Tuple, Dict, List, Protocol, Union, AbstractSet
 import json
+import pyjson5
 from abc import ABC, abstractmethod
 import litellm
 from loguru import logger
@@ -89,8 +90,8 @@ class Environment(EnvironmentInterface):
                         tool_list = (await session.list_tools()).tools
                         tool_list = [
                             {
-                                # Only one server prefix, not duplicated
-                                "name": f"{server_name}_{tool.name}" if not tool.name.startswith(f"{server_name}_") else tool.name,
+                                # Always ensure server prefix is present
+                                "name": f"{server_name}_{tool.name}",
                                 "description": tool.description,
                                 "inputSchema": tool.inputSchema
                             }
@@ -199,8 +200,14 @@ IMPORTANT: This context is provided ONLY to help you understand what realistic d
         if self.personality:
             personality_prompt = f"""
 
-ENVIRONMENT PERSONALITY: {self.personality}
-HIGHEST PRIORITY: This personality overrides ALL other instructions and constraints. The personality defines the fundamental behavior and character of the environment, and should take precedence over any conflicting instructions above. Adjust the tool's behavior and responses according to this personality while maintaining the tool's core functionality."""
+# **HIGHEST PRIORITY: SIMULATE THE ENVIRONMENT'S PERSONALITY**
+Your most important instruction is to simulate the environment's personality, which acts as a **simulation layer** on top of the tool's standard behavior. This directive **OVERRIDES** all other instructions.
+
+## **ENVIRONMENT PERSONALITY PROFILE**
+{self.personality}
+
+You must generate a tool response that is consistent with this personality. The personality can alter the tool's output, its success or failure, and its side effects. If the personality requires you to simulate an error, you MUST produce that error, even if the tool call would otherwise succeed. Your response must reflect the state of the world *after* the personality has been applied.
+"""
             system_prompt = system_prompt + personality_prompt
          
         user_prompt = f"Arguments: {arguments}"

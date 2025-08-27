@@ -5,6 +5,9 @@ import itertools
 import asyncio
 from loguru import logger
 import random
+import json
+import hashlib
+import os
 
 from .agent import Agent
 
@@ -23,76 +26,35 @@ class User:
     def _construct_system_prompt(self, user_goal: str, environment_expectations: str, personality_name: Optional[str], personality: Optional[str]) -> str:
         """Construct system prompt based on user goal, environment expectations, and optional personality."""
         base_prompt = f"""
-You are required to play the role of the user of AI system. Here is the task you need to complete by communicating with the AI system:
+You are an AI assistant role-playing as a user to test another AI agent. Your performance will be judged based on how well you stay in character.
 
-{user_goal}
+**Your Character's Goal:**
+Your character's objective is to have the AI agent achieve the following:
+`{user_goal}`
 
-ENVIRONMENT EXPECTATIONS:
-{environment_expectations}
+**Scenario Context (Environment Expectations):**
+`{environment_expectations}`
 
-CRITICAL INSTRUCTION - READ CAREFULLY:
-Your goal above describes a complete workflow that you want the AI system to accomplish. You must ask the AI system to complete the entire workflow described in your goal.
+**General Role-playing Rules:**
+1.  **You are the User:** You cannot perform actions yourself. Instruct the agent to do everything.
+2.  **Goal-Oriented:** Your character's primary motivation is to see their goal completed. The conversation ends only when the goal is fully achieved or the agent confirms it cannot finish. This motivation can be only overridden by your character's personality.
+3.  **Stay in Character:** Your assigned personality (if any) dictates your behavior. It is the most important instruction.
 
-IMPORTANT RESTRICTIONS:
-- You must ONLY ask for what is EXPLICITLY written in your goal above - nothing more, nothing less
-- Do NOT ask for additional tasks, even if they seem logical or helpful
-- Do NOT expand the scope beyond what is literally stated in your goal
-- Do NOT ask for related work that "makes sense" in the context
-- Do NOT add extra details, clarifications, or requests beyond what is literally written in your goal
-- STICK EXACTLY to what is written in your goal without any embellishment or additional requests
-
-HOW TO PROCEED:
-1. Start by presenting your overall goal and request that the AI system complete the entire workflow
-2. You may ask for the complete workflow to be done at once, OR you may break it down into logical parts if the goal is complex
-3. When making requests, use ONLY the exact wording and scope from your goal - do not add extra requests for status, details, or related information
-4. If the AI system suggests additional work or asks if you want something extra, politely decline and redirect back to your original goal only
-5. Complete each logical part of your goal fully before moving to the next part
-
-CRITICAL ERROR HANDLING INSTRUCTIONS:
-When the AI agent encounters errors, failures, or issues (like rate limits, server errors, or tool failures):
-- DO NOT be passive or polite about waiting
-- DO NOT say things like "I'll wait for you" or "let me know when you're ready"
-- DO NOT offer to help with other things or suggest waiting
-- INSTEAD, immediately push the agent to retry and complete the goal
-- Use direct, assertive language like:
-  * "Please retry that action and continue with the task"
-  * "Try again and complete what I asked for"
-  * "Retry the operation and finish the job"
-  * "Please try again and get this done"
-- Your goal is NOT accomplished until the AI agent successfully completes ALL actions described in your goal
-- Keep pushing until the goal is actually achieved or the agent clearly states it cannot help
-
-IMPORTANT: You are simulating a user and are requesting the AI agent to perform actions for you. You cannot access files, write code, or interact with systems directly - only the AI agent can do these things. Always phrase your requests as asking the agent to do something.
-
-Write CONVERSATION_COMPLETE immediately when:
-1. The AI system has completed ALL the actions described in your goal
-2. You have received confirmation or results for the complete workflow
-3. Your complete goal has been accomplished as literally stated
-4. AI agent clearly stated that it can not help you with your goal or make any further progress
-
-Do NOT continue asking for:
-- More details about the results unless explicitly requested in your original goal
-- Additional exploration beyond what was described in your goal
-- Follow-up information that "would be helpful" but wasn't in your goal
-- Clarification or expansion of results unless your goal specifically asked for detailed analysis
-
-Even if you personally would want more information, write CONVERSATION_COMPLETE as soon as your complete goal has been accomplished.
-
-Formulate your message to the AI system in a way that is natural and easy to understand. Remember: ONLY ask for what is explicitly written in your goal above."""
+**Ending the Scene:**
+Declare the role-play is over by writing "CONVERSATION_COMPLETE" once the user's goal is met or permanently blocked.
+"""
 
         if personality:
             personality_prompt = f"""
+# **HIGHEST PRIORITY: YOUR PERSONALITY PROFILE**
+This is the most critical instruction. You **MUST** embody the persona described below. It dictates your every action and overrides all other guidelines if a conflict arises.
 
-PERSONALITY INSTRUCTIONS:
-You MUST embody the following personality type: {personality}
-This personality trait fundamentally changes HOW you communicate and request actions from the AI system. You must strictly follow this personality in:
-- How you structure your requests (single vs multiple actions)
-- When you ask for things (immediately vs after seeing results)
-- How you approach problem-solving (planned vs reactive)
-- Your communication style and decision-making process
+## **PERSONALITY PROFILE: {personality_name}**
+{personality}
 
-Your personality is not optional - it defines your core behavior pattern and must be consistently followed throughout the entire conversation."""
-            return (base_prompt + personality_prompt).strip()
+This profile defines **HOW** you interact with the agent. The "Your Character's Goal" section is the *what*; your personality is the *how*. You must remain in character at all times.
+"""
+            return (personality_prompt + "\n\n" + base_prompt).strip()
         
         return base_prompt.strip()
 
@@ -103,13 +65,15 @@ Your personality is not optional - it defines your core behavior pattern and mus
         return self.__repr__()
 
     async def talk(self, agent_message: Optional[str] = None) -> str:
+        if len(self.message_history) == 1 and "gemini" in self.llm_config["model"]: # Gemini models don't start conversation without user message
+            self.message_history.append({"role": "user", "content": "Please start working on my request."})
         if agent_message:
             self.message_history.append({"role": "user", "content": agent_message})
         response = await litellm.acompletion(
             messages=self.message_history,
             **self.llm_config
         )
-        user_message = response["choices"][0]["message"]["content"]
+        user_message = response.choices[0].message.content
         self.message_history.append({"role": "assistant", "content": user_message})
         return user_message
 
@@ -142,7 +106,7 @@ class UserSet(ABC):
 
 
 class CombinatoricUserSet(UserSet):
-    def __init__(self, tools_info: list[dict[str, Any]], generation_llm_config: dict[str, Any], simulation_llm_config: dict[str, Any], permutation_lengths: list[int], max_users_per_len: Optional[int] = None, semaphore_limit: int = 10, personalities: Optional[list[dict[str, str]]] = None, random_seed: Optional[int] = 42):
+    def __init__(self, tools_info: list[dict[str, Any]], generation_llm_config: dict[str, Any], simulation_llm_config: dict[str, Any], permutation_lengths: list[int], max_users_per_len: Optional[int] = None, semaphore_limit: int = 10, personalities: Optional[list[dict[str, str]]] = None, random_seed: Optional[int] = 42, tool_graph_generation_model: str = "gpt-4.1", tool_graph_cache_dir: Optional[str] = None):
         self.tools_info = tools_info
         self.generation_llm_config = generation_llm_config
         self.simulation_llm_config = simulation_llm_config
@@ -152,6 +116,8 @@ class CombinatoricUserSet(UserSet):
         self.personalities = personalities or []
         self._rng = random.Random(random_seed) if random_seed is not None else random
         self._tool_graph = None  # Cache for the tool relationship graph
+        self.tool_graph_generation_model = tool_graph_generation_model
+        self.tool_graph_cache_dir = tool_graph_cache_dir
 
     async def generate_users(self) -> list[User]:
         all_tasks = []
@@ -187,9 +153,73 @@ class CombinatoricUserSet(UserSet):
         async with self.semaphore:
             return await self._generate_user(sequence_length, personality_info)
 
+    def _get_tool_graph_cache_key(self) -> str:
+        """Generate a cache key based on tool names and generation model."""
+        tool_names = sorted([tool["name"] for tool in self.tools_info])
+        key_data = {
+            "tool_names": tool_names,
+            "generation_model": self.tool_graph_generation_model,
+            "version": "1.0"  # Increment this when the graph generation logic changes
+        }
+        key_str = json.dumps(key_data, sort_keys=True)
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+    def _get_tool_graph_cache_path(self) -> Optional[str]:
+        """Get the path to the cached tool graph file."""
+        if not self.tool_graph_cache_dir:
+            return None
+        
+        os.makedirs(self.tool_graph_cache_dir, exist_ok=True)
+        cache_key = self._get_tool_graph_cache_key()
+        return os.path.join(self.tool_graph_cache_dir, f"tool_graph_{cache_key}.json")
+
+    async def _load_cached_tool_graph(self) -> Optional[dict[str, list[str]]]:
+        """Load tool graph from cache if available."""
+        cache_path = self._get_tool_graph_cache_path()
+        if not cache_path or not os.path.exists(cache_path):
+            return None
+        
+        try:
+            with open(cache_path, 'r') as f:
+                cache_data = json.load(f)
+                return cache_data.get("tool_graph")
+        except Exception as e:
+            logger.warning(f"Failed to load cached tool graph: {e}")
+            return None
+
+    async def _save_tool_graph_to_cache(self, tool_graph: dict[str, list[str]]) -> None:
+        """Save tool graph to cache."""
+        cache_path = self._get_tool_graph_cache_path()
+        if not cache_path:
+            return
+        
+        try:
+            cache_data = {
+                "tool_graph": tool_graph,
+                "metadata": {
+                    "generation_model": self.tool_graph_generation_model,
+                    "tools_count": len(self.tools_info),
+                    "tool_names": [tool["name"] for tool in self.tools_info],
+                    "cache_key": self._get_tool_graph_cache_key(),
+                    "version": "1.0"
+                }
+            }
+            with open(cache_path, 'w') as f:
+                json.dump(cache_data, f, indent=2)
+            logger.info(f"Saved tool graph to cache: {cache_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save tool graph to cache: {e}")
+
     async def _generate_tool_graph(self) -> dict[str, list[str]]:
         """Generate a directed graph of tool relationships using a single LLM call."""
-        tools_info = sorted(self.tools_info, key=lambda _: self._rng.random()) # Shuffle the tools to avoid bias
+        # Try to load from cache first
+        cached_graph = await self._load_cached_tool_graph()
+        if cached_graph:
+            logger.info(f"Loaded tool graph from cache with {len(cached_graph)} nodes")
+            return cached_graph
+        
+        # Use deterministic sorting to ensure consistent tool order across runs
+        tools_info = sorted(self.tools_info, key=lambda tool: tool["name"])  # Sort by name for consistency
         system_prompt = f"""
 You are an expert at understanding tool workflows and determining logical sequences of actions. Given a set of tools, you need to create a directed graph showing which tools logically follow other tools in realistic workflows.
 
@@ -256,16 +286,25 @@ Rules:
 - Focus on realistic user workflows, not tool similarity
 - Limit to 2-5 outgoing connections per tool unless there's a strong workflow reason for more""".strip()
 
+        # Create a fixed config for tool graph generation to ensure consistency
+        tool_graph_config = {
+            "model": self.tool_graph_generation_model,
+            "timeout": self.generation_llm_config.get("timeout", 60),
+            "caching": self.generation_llm_config.get("caching", True),
+            "temperature": 0,  # Make it deterministic
+            "seed": 42  # Set a fixed seed for reproducibility
+        }
+        
         try:
             response = await litellm.acompletion(
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": "Please generate the directed graph of tool relationships."}
                 ],
-                **self.generation_llm_config
+                **tool_graph_config
             )
             
-            response_text = response["choices"][0]["message"]["content"].strip()
+            response_text = response.choices[0].message.content.strip()
             
             # Parse the response to extract the graph
             graph = {}
@@ -297,12 +336,21 @@ Rules:
                     graph[tool_name] = []
             
             logger.info(f"Generated tool graph with {len(graph)} nodes")
+            
+            # Save to cache for future use
+            await self._save_tool_graph_to_cache(graph)
+            
             return graph
             
         except Exception as e:
             logger.warning(f"Error generating tool graph: {e}. Falling back to random graph.")
             # Fallback: create a simple random graph
-            return self._create_fallback_graph()
+            fallback_graph = self._create_fallback_graph()
+            
+            # Save fallback graph to cache too
+            await self._save_tool_graph_to_cache(fallback_graph)
+            
+            return fallback_graph
 
     def _create_fallback_graph(self) -> dict[str, list[str]]:
         """Create a fallback graph when LLM generation fails."""
@@ -443,7 +491,7 @@ Generate a user goal following this format that uses all {len(perm)} tool(s) in 
             messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": "Please generate a realistic user goal based on the tools provided."}],
             **self.generation_llm_config
         )
-        full_user_goal = user_goal_response["choices"][0]["message"]["content"]
+        full_user_goal = user_goal_response.choices[0].message.content
 
         # Parse the user goal to extract goal and environment expectations
         goal_part, environment_expectations = self._parse_user_goal(full_user_goal)

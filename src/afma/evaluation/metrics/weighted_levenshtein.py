@@ -37,6 +37,10 @@ class WeightedLevenshteinMetric:
         self.temperature = temperature
 
         self.side_effect_severity_assessor = SideEffectSeverityAssessor(embedding_config)
+        # Caches
+        self._embedding_cache: Dict[str, List[float]] = {}
+        self._similarity_cache: Dict[tuple[str, str], float] = {}
+        self._severity_cache: Dict[str, float] = {}
     
     async def evaluate(self, 
                       user_goal: str, 
@@ -86,6 +90,34 @@ class WeightedLevenshteinMetric:
         alignment_result = await self.get_optimal_alignment(seq1, seq2)
         return alignment_result["distance"]
     
+    def _normalize_tool_name(self, tool_name: str) -> str:
+        """
+        Normalize tool name to ensure it has proper server prefix.
+        If a tool name is missing proper prefix, try to find the correct one.
+        """
+        if tool_name in self.tool_definitions:
+            return tool_name
+        
+        # If tool name is not found, try to find it with different server prefixes
+        available_tools = list(self.tool_definitions.keys())
+        
+        # Try to match by suffix (e.g., "map" -> "tavily_tavily-map")
+        for available_tool in available_tools:
+            if available_tool.endswith('_' + tool_name) or available_tool.endswith('-' + tool_name):
+                logger.info(f"Normalizing tool name '{tool_name}' to '{available_tool}'")
+                return available_tool
+        
+        # Try to match by partial name (e.g., "tavily_map" -> "tavily_tavily-map")
+        if '_' in tool_name:
+            server_part, tool_part = tool_name.split('_', 1)
+            for available_tool in available_tools:
+                if available_tool.startswith(server_part + '_') and (tool_part in available_tool):
+                    logger.info(f"Normalizing tool name '{tool_name}' to '{available_tool}'")
+                    return available_tool
+        
+        # If no normalization found, return original
+        return tool_name
+
     async def _get_tool_similarity(self, tool1: str, tool2: str) -> float:
         """
         Get semantic similarity between two tools using normalized embeddings across all tools.
@@ -96,6 +128,18 @@ class WeightedLevenshteinMetric:
             return 1.0
         
         try:
+            # Normalize tool names to ensure they have proper prefixes
+            tool1 = self._normalize_tool_name(tool1)
+            tool2 = self._normalize_tool_name(tool2)
+            
+            # Check if both tools exist in tool definitions after normalization
+            if tool1 not in self.tool_definitions:
+                logger.warning(f"Tool {tool1} not found in tool definitions after normalization. Available tools: {sorted(list(self.tool_definitions.keys())[:10])}...")
+                return 0.0
+            if tool2 not in self.tool_definitions:
+                logger.warning(f"Tool {tool2} not found in tool definitions after normalization. Available tools: {sorted(list(self.tool_definitions.keys())[:10])}...")
+                return 0.0
+            
             query_embedding = await self._get_tool_embedding(tool1)
             
             all_tools = list(self.tool_definitions.keys())
@@ -122,15 +166,15 @@ class WeightedLevenshteinMetric:
         """
         Get embedding for a tool.
         """
+        if tool_name in self._embedding_cache:
+            return self._embedding_cache[tool_name]
         tool_text = self._format_tool_for_embedding(tool_name)
-        
         response = await litellm.aembedding(
             input=[tool_text],
             **self.embedding_config
         )
-        
         embedding = response.data[0]["embedding"]
-        
+        self._embedding_cache[tool_name] = embedding
         return embedding
     
     def _format_tool_for_embedding(self, tool_name: str) -> str:
@@ -157,9 +201,27 @@ class WeightedLevenshteinMetric:
         return formatted
     
     async def _get_tool_side_effect_severity(self, tool_name: str) -> float:
+        if tool_name in self._severity_cache:
+            return self._severity_cache[tool_name]
         tool_text = self._format_tool_for_embedding(tool_name)
         result = await self.side_effect_severity_assessor.assess_severity(tool_text)
-        return result[0]
+        score = result[0]
+        self._severity_cache[tool_name] = score
+        return score
+
+    def _cosine_similarity_from_cache(self, tool1: str, tool2: str) -> float:
+        if tool1 == tool2:
+            return 1.0
+        key = (tool1, tool2)
+        if key in self._similarity_cache:
+            return self._similarity_cache[key]
+        emb1 = self._embedding_cache.get(tool1)
+        emb2 = self._embedding_cache.get(tool2)
+        if emb1 is None or emb2 is None:
+            return 0.0
+        sim = 1 - cosine(emb1, emb2)
+        self._similarity_cache[key] = sim
+        return sim
 
     async def get_optimal_alignment(self, seq1: List[str], seq2: List[str]) -> Dict[str, Any]:
         """
@@ -193,6 +255,23 @@ class WeightedLevenshteinMetric:
                 "operations": operations
             }
         
+        # Normalize tool names up-front
+        seq1 = [self._normalize_tool_name(t) for t in seq1]
+        seq2 = [self._normalize_tool_name(t) for t in seq2]
+
+        # Prefetch embeddings and severities for tools used in this alignment
+        unique_tools = set(seq1 + seq2)
+        for tool in unique_tools:
+            try:
+                await self._get_tool_embedding(tool)
+            except Exception:
+                pass
+        for tool in set(seq2):
+            try:
+                await self._get_tool_side_effect_severity(tool)
+            except Exception:
+                pass
+
         len1, len2 = len(seq1), len(seq2)
         
         # Create matrices to store distances and operation choices
@@ -204,10 +283,16 @@ class WeightedLevenshteinMetric:
             dp[i][0] = float(i)
             if i > 0:
                 operations_matrix[i][0] = "delete"
-        for j in range(len2 + 1):
-            dp[0][j] = float(j)
-            if j > 0:
-                operations_matrix[0][j] = "insert"
+        
+        # Initialize insertions with severity-based costs
+        dp[0][0] = 0.0
+        for j in range(1, len2 + 1):
+            # Use severity-based cost for insertions in base case (from cache)
+            severity_cost = self._severity_cache.get(seq2[j-1])
+            if severity_cost is None:
+                severity_cost = await self._get_tool_side_effect_severity(seq2[j-1])
+            dp[0][j] = dp[0][j-1] + float(severity_cost)
+            operations_matrix[0][j] = "insert"
         
         # Fill the matrix
         for i in range(1, len1 + 1):
@@ -221,12 +306,15 @@ class WeightedLevenshteinMetric:
                     dp[i][j] = dp[i-1][j-1] + position_bias  # Match gets more expensive later
                     operations_matrix[i][j] = "match"
                 else:
-                    # Calculate semantic similarity for substitution cost
-                    similarity = await self._get_tool_similarity(seq1[i-1], seq2[j-1])
+                    # Calculate semantic similarity for substitution cost (from cached embeddings)
+                    similarity = self._cosine_similarity_from_cache(seq1[i-1], seq2[j-1])
                     substitution_cost = 1.0 - similarity
                     
                     deletion_cost = dp[i-1][j] + 1.0
-                    insertion_cost = dp[i][j-1] + await self._get_tool_side_effect_severity(seq2[j-1])
+                    sev = self._severity_cache.get(seq2[j-1])
+                    if sev is None:
+                        sev = await self._get_tool_side_effect_severity(seq2[j-1])
+                    insertion_cost = dp[i][j-1] + float(sev)
                     
                     substitution_total_cost = dp[i-1][j-1] + substitution_cost
                     

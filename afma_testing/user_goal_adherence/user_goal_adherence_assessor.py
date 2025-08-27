@@ -1,5 +1,6 @@
 import asyncio
 import json
+import pyjson5
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 from loguru import logger
@@ -67,7 +68,7 @@ class UserGoalAdherenceAssessor:
                 )
                 
                 # Parse response
-                content = response.choices[0].message.content.strip()
+                content = response.choices[0].message.content.strip().replace('```json', '').replace('```', '')
                 score, reasoning = self._parse_assessment_response(content)
                 
                 return UserGoalAdherenceResult(
@@ -198,7 +199,7 @@ Response:"""
         """Parse the LLM response to extract score and reasoning."""
         try:
             # Try to parse as JSON
-            data = json.loads(response)
+            data = pyjson5.loads(response)
             score = float(data.get("score", 0))
             reasoning = data.get("reasoning", "")
             

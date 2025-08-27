@@ -18,6 +18,7 @@ from collections import defaultdict, Counter
 from typing import List, Dict, Any
 import os
 import sys
+import statistics
 from pathlib import Path
 
 from afma.alignment_visualization import (
@@ -249,24 +250,33 @@ def analyze_alignment_patterns_by_personality(conversations: List[Dict[str, Any]
     total_operations = Counter()
     
     # Process relevant trace alignments only
-    for trace_set_id, alignment_data in trace_alignments.items():
-        if trace_set_id not in relevant_trace_sets:
-            continue
+    for conv in filtered_conversations:
+        trace_set_id = conv.get("trace_set_id")
+        instantiation_id = conv.get("instantiation_id")
+
+        if trace_set_id and instantiation_id is not None and trace_set_id in trace_alignments:
+            alignment_data = trace_alignments[trace_set_id]
+            alignments = alignment_data.get("alignments", [])
+            if instantiation_id < len(alignments):
+                alignment = alignments[instantiation_id]
+                operations = alignment.get("operations", [])
             
-        alignments = alignment_data.get("alignments", [])
-        
-        for alignment in alignments:
-            operations = alignment.get("operations", [])
-            
-            for op_type, tool1, tool2 in operations:
-                total_operations[op_type] += 1
-                
-                if op_type == "substitute":
-                    substitutions[(tool1, tool2)] += 1
-                elif op_type == "insert":
-                    insertions[tool2] += 1
-                elif op_type == "delete":
-                    deletions[tool1] += 1
+                for op_type, tool1, tool2 in operations:
+                    total_operations[op_type] += 1
+                    
+                    if op_type == "substitute":
+                        substitutions[(tool1, tool2)] += 1
+                    elif op_type == "insert":
+                        insertions[tool2] += 1
+                    elif op_type == "delete":
+                        deletions[tool1] += 1
+
+    # Calculate scores
+    goal_scores = [get_goal_achievement_score(c, trace_alignments) for c in filtered_conversations]
+    alignment_scores = [get_similarity_score(c, trace_alignments)[0] for c in filtered_conversations]
+
+    avg_goal_achievement = sum(goal_scores) / len(goal_scores) if goal_scores else 0
+    avg_alignment_score = sum(alignment_scores) / len(alignment_scores) if alignment_scores else 0
     
     return {
         "substitutions": substitutions,
@@ -274,7 +284,11 @@ def analyze_alignment_patterns_by_personality(conversations: List[Dict[str, Any]
         "deletions": deletions,
         "total_operations": total_operations,
         "conversation_count": len(filtered_conversations),
-        "trace_set_count": len(relevant_trace_sets)
+        "trace_set_count": len(relevant_trace_sets),
+        "avg_goal_achievement": avg_goal_achievement,
+        "avg_alignment_score": avg_alignment_score,
+        "user_personality": user_personality,
+        "env_personality": env_personality
     }
 
 
@@ -700,6 +714,21 @@ def main():
             st.markdown("**Environment Personality:**")
             env_personality_name = conv.get('environment_personality_name', 'None')
             st.write(env_personality_name if env_personality_name else 'None')
+            
+            # Environment Expectations
+            if "environment_expectations" in conv:
+                st.markdown("**Environment Expectations:**")
+                env_expectations = conv["environment_expectations"]
+                if isinstance(env_expectations, str):
+                    st.write(env_expectations)
+                elif isinstance(env_expectations, dict):
+                    for key, value in env_expectations.items():
+                        st.write(f"**{key}:** {value}")
+                elif isinstance(env_expectations, list):
+                    for i, expectation in enumerate(env_expectations, 1):
+                        st.write(f"{i}. {expectation}")
+                else:
+                    st.write(str(env_expectations))
     
     with tab3:
         st.header("Similarity Analysis")
@@ -868,7 +897,7 @@ def main():
                         st.write(f"**{role.title()}:** {content}")
             
             with col2:
-                st.markdown("**Metadata**")
+                st.subheader("Metadata")
                 
                 # Tools
                 user_source_tools = [tool.get('name', '') for tool in conv.get('user_source', [])]
@@ -893,6 +922,21 @@ def main():
                 st.markdown("**Environment Personality:**")
                 env_personality_name = conv.get('environment_personality_name', 'None')
                 st.write(env_personality_name if env_personality_name else 'None')
+                
+                # Environment Expectations
+                if "environment_expectations" in conv:
+                    st.markdown("**Environment Expectations:**")
+                    env_expectations = conv["environment_expectations"]
+                    if isinstance(env_expectations, str):
+                        st.write(env_expectations)
+                    elif isinstance(env_expectations, dict):
+                        for key, value in env_expectations.items():
+                            st.write(f"**{key}:** {value}")
+                    elif isinstance(env_expectations, list):
+                        for i, expectation in enumerate(env_expectations, 1):
+                            st.write(f"{i}. {expectation}")
+                    else:
+                        st.write(str(env_expectations))
                 
                 # Additional trace-specific metadata
                 if 'trace_set_id' in conv:
@@ -926,8 +970,11 @@ def main():
             with col2:
                 avg_similarity = sum(ts["avg_similarity"] for ts in alignment_summary) / len(alignment_summary) if alignment_summary else 0
                 min_similarity = min(ts["min_similarity"] for ts in alignment_summary) if alignment_summary else 0
+                # Calculate average std deviation across all trace sets
+                avg_std_similarity = sum(ts.get("std_similarity", 0) for ts in alignment_summary) / len(alignment_summary) if alignment_summary else 0
                 st.metric("Avg Alignment Similarity", f"{avg_similarity:.3f}")
                 st.metric("Min Alignment Similarity", f"{min_similarity:.3f}")
+                st.metric("Avg Std Similarity", f"{avg_std_similarity:.3f}")
             
             with col3:
                 # Calculate variety metrics
@@ -949,10 +996,29 @@ def main():
                 # Sort by average similarity (lowest first - most problematic)
                 sorted_trace_sets = sorted(alignment_summary, key=lambda x: x["avg_similarity"])
                 
+                # Calculate missing standard deviations for trace sets
+                for ts in sorted_trace_sets:
+                    if "std_similarity" not in ts or ts["std_similarity"] is None:
+                        trace_set_id = ts["trace_set_id"]
+                        if trace_set_id in trace_alignments:
+                            alignment_data = trace_alignments[trace_set_id]
+                            similarities = [alignment.get("similarity", 0) for alignment in alignment_data.get("alignments", [])]
+                            if len(similarities) > 1:
+                                ts["std_similarity"] = statistics.stdev(similarities)
+                            else:
+                                ts["std_similarity"] = 0.0
+                        else:
+                            ts["std_similarity"] = 0.0
+                
+                def format_trace_set(x):
+                    ts = sorted_trace_sets[x]
+                    std_sim = ts.get("std_similarity", 0.0)
+                    return f"Set {x+1}: {ts['user_goal'][:50]}... (Avg Sim: {ts['avg_similarity']:.3f}, Std: {std_sim:.3f}, {ts['instantiation_count']} instances)"
+                
                 trace_set_index = st.selectbox(
                     "Select Trace Set",
                     range(len(sorted_trace_sets)),
-                    format_func=lambda x: f"Set {x+1}: {sorted_trace_sets[x]['user_goal'][:50]}... (Avg Sim: {sorted_trace_sets[x]['avg_similarity']:.3f}, {sorted_trace_sets[x]['instantiation_count']} instances)",
+                    format_func=format_trace_set,
                     key="trace_set_selector"
                 )
                 
@@ -1022,6 +1088,21 @@ def main():
                     for tool in selected_trace_set["expected_tools"]:
                         st.code(tool)
                     
+                    # Show environment expectations if available
+                    if "environment_expectations" in selected_trace_set:
+                        st.markdown("**Environment Expectations:**")
+                        env_expectations = selected_trace_set["environment_expectations"]
+                        if isinstance(env_expectations, str):
+                            st.write(env_expectations)
+                        elif isinstance(env_expectations, dict):
+                            for key, value in env_expectations.items():
+                                st.write(f"**{key}:** {value}")
+                        elif isinstance(env_expectations, list):
+                            for i, expectation in enumerate(env_expectations, 1):
+                                st.write(f"{i}. {expectation}")
+                        else:
+                            st.write(str(env_expectations))
+                    
                     st.markdown("**Personalities:**")
                     user_personality_name = selected_trace_set.get('user_personality_name', 'None')
                     env_personality_name = selected_trace_set.get('environment_personality_name', 'None')
@@ -1033,6 +1114,21 @@ def main():
                     st.metric("Avg Similarity", f"{selected_trace_set['avg_similarity']:.3f}")
                     st.metric("Max Similarity", f"{selected_trace_set['max_similarity']:.3f}")
                     st.metric("Min Similarity", f"{selected_trace_set['min_similarity']:.3f}")
+                    
+                    # Calculate or get standard deviation of similarities within this trace set
+                    std_similarity = selected_trace_set.get("std_similarity")
+                    if std_similarity is None and trace_set_id in trace_alignments:
+                        # Calculate std deviation from the alignment data
+                        alignment_data = trace_alignments[trace_set_id]
+                        similarities = [alignment.get("similarity", 0) for alignment in alignment_data.get("alignments", [])]
+                        if len(similarities) > 1:
+                            std_similarity = statistics.stdev(similarities)
+                        else:
+                            std_similarity = 0.0
+                    else:
+                        std_similarity = std_similarity or 0.0
+                    
+                    st.metric("Std Similarity", f"{std_similarity:.3f}")
                     
                     # Show individual conversations
                     st.markdown("**View Individual Conversations:**")
@@ -1149,6 +1245,21 @@ def main():
                 env_personality_name = conv.get('environment_personality_name', 'None')
                 st.write(env_personality_name if env_personality_name else 'None')
                 
+                # Environment Expectations
+                if "environment_expectations" in conv:
+                    st.markdown("**Environment Expectations:**")
+                    env_expectations = conv["environment_expectations"]
+                    if isinstance(env_expectations, str):
+                        st.write(env_expectations)
+                    elif isinstance(env_expectations, dict):
+                        for key, value in env_expectations.items():
+                            st.write(f"**{key}:** {value}")
+                    elif isinstance(env_expectations, list):
+                        for i, expectation in enumerate(env_expectations, 1):
+                            st.write(f"{i}. {expectation}")
+                    else:
+                        st.write(str(env_expectations))
+                
                 # Additional trace-specific metadata
                 if 'trace_set_id' in conv:
                     st.markdown("**Trace Information:**")
@@ -1246,15 +1357,13 @@ def main():
             total_all_ops = sum(total_ops.values())
             error_rate = (total_error_ops / total_all_ops * 100) if total_all_ops > 0 else 0
             
-            # Calculate mean goal achievement for this group
-            group_goal_scores = []
-            for conv in conversations:
-                if group_name.endswith(conv.get('user_personality_name', 'None')) or group_name.endswith(conv.get('environment_personality_name', 'None')):
-                    group_goal_scores.append(get_goal_achievement_score(conv, trace_alignments))
-            mean_goal_achievement = sum(group_goal_scores) / len(group_goal_scores) if group_goal_scores else 0
+            mean_goal_achievement = patterns.get("avg_goal_achievement", 0.0)
+            mean_alignment_score = patterns.get("avg_alignment_score", 0.0)
             
             metrics_data.append({
                 "Group": group_name,
+                "User Personality": patterns.get("user_personality"),
+                "Environment Personality": patterns.get("env_personality"),
                 "Conversations": conversation_count,
                 "Trace Sets": trace_set_count,
                 "Total Operations": total_all_ops,
@@ -1262,12 +1371,158 @@ def main():
                 "Substitutions": total_ops.get("substitute", 0),
                 "Insertions": total_ops.get("insert", 0),
                 "Deletions": total_ops.get("delete", 0),
+                "Mean Trace Alignment": round(mean_alignment_score, 3),
                 "Mean Goal Achievement": round(mean_goal_achievement, 3)
             })
         
         if metrics_data:
             metrics_df = pd.DataFrame(metrics_data)
-            st.dataframe(metrics_df, use_container_width=True)
+
+            if comparison_type == "User vs Environment":
+                if 'User Personality' in metrics_df.columns and 'Environment Personality' in metrics_df.columns:
+                    st.subheader("🎯 Mean Goal Achievement")
+                    goal_pivot = metrics_df.pivot_table(
+                        index='User Personality', 
+                        columns='Environment Personality', 
+                        values='Mean Goal Achievement',
+                        aggfunc='mean',
+                        margins=True,
+                        margins_name='Average'
+                    )
+                    st.dataframe(goal_pivot.style.background_gradient(cmap='viridis', axis=None).format("{:.3f}"), use_container_width=True)
+
+                    st.subheader("📏 Mean Trace Alignment Score")
+                    alignment_pivot = metrics_df.pivot_table(
+                        index='User Personality',
+                        columns='Environment Personality',
+                        values='Mean Trace Alignment',
+                        aggfunc='mean',
+                        margins=True,
+                        margins_name='Average'
+                    )
+                    st.dataframe(alignment_pivot.style.background_gradient(cmap='viridis', axis=None).format("{:.3f}"), use_container_width=True)
+
+                    # Add sequence length breakdown
+                    st.subheader("📊 Performance by Sequence Length")
+                    
+                    # Calculate sequence length data for user vs environment combinations
+                    sequence_length_data = []
+                    
+                    user_ps = [p for p in selected_user_personalities if p in user_personalities] if "All" not in selected_user_personalities else user_personalities
+                    env_ps = [p for p in selected_env_personalities if p in env_personalities] if "All" not in selected_env_personalities else env_personalities
+                    
+                    for user_p in user_ps:
+                        for env_p in env_ps:
+                            # Filter conversations for this personality combination
+                            filtered_convs = [c for c in conversations 
+                                            if c.get('user_personality_name', 'None') == user_p 
+                                            and c.get('environment_personality_name', 'None') == env_p]
+                            
+                            if not filtered_convs:
+                                continue
+                            
+                            # Group by sequence length
+                            length_groups = defaultdict(list)
+                            for conv in filtered_convs:
+                                # Use the expected sequence length (from user_source) or actual sequence length (from used_tools)
+                                expected_length = len(conv.get('user_source', []))
+                                actual_length = len(conv.get('used_tools', []))
+                                # Use expected length if available, otherwise actual length
+                                seq_length = expected_length if expected_length > 0 else actual_length
+                                length_groups[seq_length].append(conv)
+                            
+                            # Calculate metrics for each length group
+                            for seq_length, length_convs in length_groups.items():
+                                goal_scores = [get_goal_achievement_score(c, trace_alignments) for c in length_convs]
+                                alignment_scores = [get_similarity_score(c, trace_alignments)[0] for c in length_convs]
+                                
+                                avg_goal = sum(goal_scores) / len(goal_scores) if goal_scores else 0
+                                avg_alignment = sum(alignment_scores) / len(alignment_scores) if alignment_scores else 0
+                                
+                                sequence_length_data.append({
+                                    'User Personality': user_p,
+                                    'Environment Personality': env_p,
+                                    'Sequence Length': seq_length,
+                                    'Conversation Count': len(length_convs),
+                                    'Mean Goal Achievement': round(avg_goal, 3),
+                                    'Mean Alignment Score': round(avg_alignment, 3)
+                                })
+                    
+                    if sequence_length_data:
+                        seq_df = pd.DataFrame(sequence_length_data)
+                        
+                        # Create pivot tables for different sequence lengths
+                        st.markdown("**Goal Achievement by Sequence Length**")
+                        
+                        # Show data grouped by sequence length
+                        length_tabs = []
+                        unique_lengths = sorted(seq_df['Sequence Length'].unique())
+                        
+                        if len(unique_lengths) > 1:
+                            for length in unique_lengths:
+                                length_data = seq_df[seq_df['Sequence Length'] == length]
+                                if not length_data.empty:
+                                    st.markdown(f"**Sequence Length {length}:**")
+                                    
+                                    # Create pivot for this length
+                                    length_pivot = length_data.pivot_table(
+                                        index='User Personality',
+                                        columns='Environment Personality',
+                                        values='Mean Goal Achievement',
+                                        aggfunc='mean'
+                                    )
+                                    
+                                    if not length_pivot.empty:
+                                        col1, col2 = st.columns(2)
+                                        
+                                        with col1:
+                                            st.markdown("*Goal Achievement:*")
+                                            st.dataframe(length_pivot.style.background_gradient(cmap='viridis', axis=None).format("{:.3f}"))
+                                        
+                                        with col2:
+                                            # Alignment scores for this length
+                                            alignment_length_pivot = length_data.pivot_table(
+                                                index='User Personality',
+                                                columns='Environment Personality',
+                                                values='Mean Alignment Score',
+                                                aggfunc='mean'
+                                            )
+                                            st.markdown("*Alignment Score:*")
+                                            st.dataframe(alignment_length_pivot.style.background_gradient(cmap='viridis', axis=None).format("{:.3f}"))
+                                    
+                                    st.markdown("---")
+                        
+                        # Summary statistics by length
+                        st.markdown("**Summary by Sequence Length**")
+                        length_summary = seq_df.groupby('Sequence Length').agg({
+                            'Conversation Count': 'sum',
+                            'Mean Goal Achievement': 'mean',
+                            'Mean Alignment Score': 'mean'
+                        }).round(3)
+                        length_summary.columns = ['Total Conversations', 'Avg Goal Achievement', 'Avg Alignment Score']
+                        st.dataframe(length_summary, use_container_width=True)
+                        
+                        # Analysis insights
+                        if len(unique_lengths) > 1:
+                            st.markdown("**Sequence Length Insights:**")
+                            
+                            # Find best/worst performing lengths
+                            best_length_goal = length_summary['Avg Goal Achievement'].idxmax()
+                            worst_length_goal = length_summary['Avg Goal Achievement'].idxmin()
+                            best_length_alignment = length_summary['Avg Alignment Score'].idxmax()
+                            worst_length_alignment = length_summary['Avg Alignment Score'].idxmin()
+                            
+                            st.markdown(f"• **Best goal achievement:** Length {best_length_goal} ({length_summary.loc[best_length_goal, 'Avg Goal Achievement']:.3f})")
+                            st.markdown(f"• **Worst goal achievement:** Length {worst_length_goal} ({length_summary.loc[worst_length_goal, 'Avg Goal Achievement']:.3f})")
+                            st.markdown(f"• **Best alignment score:** Length {best_length_alignment} ({length_summary.loc[best_length_alignment, 'Avg Alignment Score']:.3f})")
+                            st.markdown(f"• **Worst alignment score:** Length {worst_length_alignment} ({length_summary.loc[worst_length_alignment, 'Avg Alignment Score']:.3f})")
+                    else:
+                        st.info("No sequence length data available for the selected personality combinations.")
+                else:
+                    st.warning("Not enough data to create pivot tables. Ensure you have combinations of user and environment personalities.")
+
+            else:
+                st.dataframe(metrics_df.drop(columns=['User Personality', 'Environment Personality']), use_container_width=True)
         
         # Detailed pattern comparisons
         st.subheader("🔍 Detailed Pattern Analysis")

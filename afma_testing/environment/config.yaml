@@ -1,7 +1,7 @@
 # Environment testing configuration
 environment_testing:
   litellm:
-    model: gpt-4.1-mini
+    model: gemini/gemini-2.5-flash
     temperature: 0.3
     top_p: 0.9
     timeout: 30
@@ -16,13 +16,13 @@ environment_testing:
     
   # Grid testing parameters
   grid_testing:
-    file_counts: [5, 10, 20]
-    task_complexities: [5, 10, 20]
-    runs_per_config: 5
+    file_counts: [1, 2, 3, 4, 5, 6, 7]
+    task_complexities: [1, 2, 3, 4, 5, 6, 7]
+    runs_per_config: 20
     
   # State generation parameters
   state_generation:
-    file_types: ["txt", "md", "py", "js", "json", "yaml"]
+    file_types: ["txt", "md", "py", "js", "json", "yaml", "html"]
     content_themes: ["documentation", "code", "data", "configuration"]
     
   # Task generation parameters

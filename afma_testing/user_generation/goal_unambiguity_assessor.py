@@ -1,4 +1,6 @@
 import asyncio
+import json
+import pyjson5
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
@@ -116,34 +118,27 @@ Please identify ALL missing information in the user goal and environment expecta
                     **self.llm_config
                 )
                 
-                response_text = response["choices"][0]["message"]["content"].strip()
+                response_text = response.choices[0].message.content.strip().replace('```json', '').replace('```', '')
                 
                 # Parse JSON response
-                try:
-                    import json
-                    result_data = json.loads(response_text)
-                    
-                    missing_information = result_data.get("missing_information", [])
-                    reasoning = result_data.get("reasoning", "No reasoning provided")
-                    
-                    # Calculate score as number_of_issues / n_tools
-                    score = len(missing_information) / len(tool_sequence) if tool_sequence else 0.0
-                    
-                    return GoalUnambiguityResult(
-                        score=score,
-                        details={
-                            "raw_response": response_text,
-                            "n_tools": len(tool_sequence),
-                            "n_missing_information": len(missing_information)
-                        },
-                        missing_information=missing_information,
-                        reasoning=reasoning
-                    )
-                    
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse JSON response: {e}")
-                    # Fallback: try to extract missing information from text
-                    return self._parse_fallback_response(response_text, tool_sequence)
+                result_data = pyjson5.loads(response_text)
+                
+                missing_information = result_data.get("missing_information", [])
+                reasoning = result_data.get("reasoning", "No reasoning provided")
+                
+                # Calculate score as number_of_issues / n_tools
+                score = len(missing_information) / len(tool_sequence) if tool_sequence else 0.0
+                
+                return GoalUnambiguityResult(
+                    score=score,
+                    details={
+                        "raw_response": response_text,
+                        "n_tools": len(tool_sequence),
+                        "n_missing_information": len(missing_information)
+                    },
+                    missing_information=missing_information,
+                    reasoning=reasoning
+                )
                     
             except Exception as e:
                 logger.error(f"Error in goal unambiguity assessment: {e}")
@@ -154,43 +149,6 @@ Please identify ALL missing information in the user goal and environment expecta
                     reasoning="Assessment failed due to error",
                     error=str(e)
                 )
-    
-    def _parse_fallback_response(self, response_text: str, tool_sequence: List[Dict[str, Any]]) -> GoalUnambiguityResult:
-        """Parse response when JSON parsing fails."""
-        # Try to extract missing information from text
-        import re
-        
-        # Look for missing information patterns
-        missing_patterns = [
-            r'missing information in the user goal',
-            r'missing information in the environment expectations',
-            r'missing information in the tool sequence',
-            r'missing data sources',
-            r'missing files',
-            r'missing inputs',
-            r'missing outputs',
-            r'missing results'
-        ]
-        
-        missing_information = []
-        for pattern in missing_patterns:
-            match = re.search(pattern, response_text, re.IGNORECASE)
-            if match:
-                missing_information.append(match.group(0))
-        
-        # Calculate score as number_of_issues / n_tools
-        score = len(missing_information) / len(tool_sequence) if tool_sequence else 0.0
-        
-        return GoalUnambiguityResult(
-            score=score,
-            details={
-                "raw_response": response_text,
-                "n_tools": len(tool_sequence),
-                "n_missing_information": len(missing_information)
-            },
-            missing_information=missing_information,
-            reasoning="Response parsed with fallback method"
-        )
     
     async def assess_batch(self, user_data: List[Dict[str, Any]]) -> List[GoalUnambiguityResult]:
         """

@@ -6,6 +6,7 @@ import json
 import os
 import asyncio
 import uuid
+import statistics
 from pathlib import Path
 from typing import Dict, Any, List, Tuple
 from loguru import logger
@@ -21,7 +22,7 @@ from .state_comparator import StateComparator
 class ConcurrentEnvironmentTestRunner:
     """Concurrent test runner for environment simulation testing with session isolation."""
     
-    def __init__(self, config_path: str = "src/afma/environment_testing/config.yaml"):
+    def __init__(self, config_path: str = "afma_testing/environment/config.yaml"):
         self.config_path = config_path
         self.config = self._load_config()
         self.test_config = self.config["environment_testing"]
@@ -422,8 +423,14 @@ class ConcurrentEnvironmentTestRunner:
                 config_summary["average_execution_time"] /= config_summary["total_runs"]
                 if config_summary["similarity_scores"]:
                     config_summary["average_similarity"] = sum(config_summary["similarity_scores"]) / len(config_summary["similarity_scores"])
+                    # Calculate standard deviation
+                    if len(config_summary["similarity_scores"]) > 1:
+                        config_summary["std_similarity"] = statistics.stdev(config_summary["similarity_scores"])
+                    else:
+                        config_summary["std_similarity"] = 0.0
                 else:
                     config_summary["average_similarity"] = 0.0
+                    config_summary["std_similarity"] = 0.0
         
         return summary
     

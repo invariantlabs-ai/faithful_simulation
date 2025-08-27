@@ -1,4 +1,5 @@
 import asyncio
+import pyjson5
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
@@ -83,34 +84,27 @@ Please identify ALL missing elements in the environment expectations that would 
                     **self.llm_config
                 )
                 
-                response_text = response["choices"][0]["message"]["content"].strip()
+                response_text = response.choices[0].message.content.strip().replace('```json', '').replace('```', '')
                 
                 # Parse JSON response
-                try:
-                    import json
-                    result_data = json.loads(response_text)
-                    
-                    missing_elements = result_data.get("missing_elements", [])
-                    reasoning = result_data.get("reasoning", "No reasoning provided")
-                    
-                    # Calculate score as number_of_issues / n_tools
-                    score = len(missing_elements) / len(tool_sequence) if tool_sequence else 0.0
-                    
-                    return EnvironmentCompletenessResult(
-                        score=score,
-                        details={
-                            "raw_response": response_text,
-                            "n_tools": len(tool_sequence),
-                            "n_missing_elements": len(missing_elements)
-                        },
-                        missing_elements=missing_elements,
-                        reasoning=reasoning
-                    )
-                    
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse JSON response: {e}")
-                    # Fallback: try to extract missing elements from text
-                    return self._parse_fallback_response(response_text, tool_sequence)
+                result_data = pyjson5.loads(response_text)
+                
+                missing_elements = result_data.get("missing_elements", [])
+                reasoning = result_data.get("reasoning", "No reasoning provided")
+                
+                # Calculate score as number_of_issues / n_tools
+                score = len(missing_elements) / len(tool_sequence) if tool_sequence else 0.0
+                
+                return EnvironmentCompletenessResult(
+                    score=score,
+                    details={
+                        "raw_response": response_text,
+                        "n_tools": len(tool_sequence),
+                        "n_missing_elements": len(missing_elements)
+                    },
+                    missing_elements=missing_elements,
+                    reasoning=reasoning
+                )
                     
             except Exception as e:
                 logger.error(f"Error in environment completeness assessment: {e}")
@@ -150,41 +144,7 @@ Please identify ALL missing elements in the environment expectations that would 
         
         return formatted_info.strip()
     
-    def _parse_fallback_response(self, response_text: str, tool_sequence: List[Dict[str, Any]]) -> EnvironmentCompletenessResult:
-        """Parse response when JSON parsing fails."""
-        # Try to extract missing elements from text
-        import re
-        
-        # Look for missing elements patterns
-        missing_elements_patterns = [
-            r'missing_elements["\s]*:["\s]*\[(["\s]*[^"]*["\s]*)*\]',
-            r'Missing elements: ["\s]*\[(["\s]*[^"]*["\s]*)*\]',
-            r'Missing elements: ["\s]*([^,]+)',
-            r'Missing elements: ["\s]*([^,]+)'
-        ]
-        
-        missing_elements = []
-        for pattern in missing_elements_patterns:
-            match = re.search(pattern, response_text, re.IGNORECASE)
-            if match:
-                elements = match.group(1).split(",") if match.group(1) else []
-                missing_elements = [element.strip() for element in elements]
-                break
-        
-        # Calculate score as number_of_issues / n_tools
-        score = len(missing_elements) / len(tool_sequence) if tool_sequence else 0.0
-        
-        return EnvironmentCompletenessResult(
-            score=score,
-            details={
-                "raw_response": response_text,
-                "parsed_with_fallback": True,
-                "n_tools": len(tool_sequence),
-                "n_missing_elements": len(missing_elements)
-            },
-            missing_elements=missing_elements,
-            reasoning="Response parsed with fallback method"
-        )
+
     
     async def assess_batch(self, user_data: List[Dict[str, Any]]) -> List[EnvironmentCompletenessResult]:
         """

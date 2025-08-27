@@ -5,6 +5,7 @@ import os
 import sys
 import json
 import yaml
+import shutil
 from typing import Optional, Tuple, List, Dict, Any
 from pathlib import Path
 
@@ -93,7 +94,9 @@ def create_users_command(mcp_config_path: str, litellm_config_path: str, output:
                 generation_llm_config=llm_config,
                 simulation_llm_config=llm_config,
                 permutation_lengths=parsed_lengths,
-                max_users_per_len=max_users_per_len
+                max_users_per_len=max_users_per_len,
+                tool_graph_generation_model="gpt-4.1",  # Always use consistent model for tool graph generation
+                tool_graph_cache_dir=os.path.expanduser("~/.afma/tool_graph_cache")  # Cache directory
             )
 
             # Generate users
@@ -118,7 +121,9 @@ def create_users_command(mcp_config_path: str, litellm_config_path: str, output:
                     "permutation_lengths": parsed_lengths,
                     "max_users_per_len": max_users_per_len,
                     "tools_count": len(all_tools),
-                    "tool_names": [tool["name"] for tool in all_tools]
+                    "tool_names": [tool["name"] for tool in all_tools],
+                    "tool_graph_generation_model": user_set.tool_graph_generation_model,
+                    "random_seed": 42
                 }
             }
             
@@ -161,6 +166,11 @@ def run_pipeline_command(config_path: str, output_dir: str):
             # Create output directory
             os.makedirs(output_dir, exist_ok=True)
             
+            # Copy config file to results directory for reproducibility
+            config_filename = os.path.basename(config_path)
+            config_dest_path = os.path.join(output_dir, config_filename)
+            shutil.copy2(config_path, config_dest_path)
+            logger.success(f"Copied config file to {config_dest_path}")
             
             # Extract configuration sections
             user_generation_config = config["user_generation"]
@@ -212,7 +222,9 @@ def run_pipeline_command(config_path: str, output_dir: str):
                     permutation_lengths=user_generation_config["permutation_lengths"],
                     max_users_per_len=user_generation_config["max_users_per_len"],
                     semaphore_limit=user_generation_config["semaphore_limit"],
-                    personalities=user_personalities
+                    personalities=user_personalities,
+                    tool_graph_generation_model="gpt-4.1",  # Always use consistent model for tool graph generation
+                    tool_graph_cache_dir=os.path.expanduser("~/.afma/tool_graph_cache")  # Cache directory
                 )
                 
                 logger.info("Generating users...")
@@ -231,6 +243,21 @@ def run_pipeline_command(config_path: str, output_dir: str):
                 with open(user_profiles_path, 'w') as f:
                     json.dump(user_profiles, f, indent=2)
                 logger.success(f"Saved {len(user_profiles)} user profiles to {user_profiles_path}")
+                
+                # Save tool graph separately
+                tool_graph_path = os.path.join(output_dir, "tool_graph.json")
+                tool_graph_data = {
+                    "tool_graph": user_set._tool_graph,
+                    "metadata": {
+                        "generation_model": user_set.tool_graph_generation_model,
+                        "tools_count": len(all_tools),
+                        "tool_names": [tool["name"] for tool in all_tools],
+                        "random_seed": 42  # Document the seed used
+                    }
+                }
+                with open(tool_graph_path, 'w') as f:
+                    json.dump(tool_graph_data, f, indent=2)
+                logger.success(f"Saved tool graph to {tool_graph_path}")
             
             # Check if conversations already exist
             conversations_path = os.path.join(output_dir, "conversations.json")
@@ -270,6 +297,7 @@ def run_pipeline_command(config_path: str, output_dir: str):
                 environment_personalities = environment_config["simulated_qualities"]
                 use_simulated_env = environment_config["simulated"]
                 instantiations_per_trace = simulation_config["instantiations_per_trace"]
+                logger.info(f"Using {instantiations_per_trace} instantiations per trace set, {len(users)} users, simulated environment: {use_simulated_env}")
                 
                 all_conversations = []
                 concurrency = simulation_config["concurrency"]
@@ -293,9 +321,12 @@ def run_pipeline_command(config_path: str, output_dir: str):
                         agent = Agent(agent_config.get("litellm", {}), environment)
                         
                         try:
-                            history = await user.talk_with(agent, max_turns=max_turns)
+                            history = await asyncio.wait_for(user.talk_with(agent, max_turns=max_turns), timeout=1000)
+                        except asyncio.TimeoutError:
+                            logger.error(f"Simulation timed out after 1000 seconds for trace set {trace_set_id} instantiation {instantiation_id}")
+                            return None
                         except Exception as e:
-                            logger.error(f"Error in simulation: {e}")
+                            logger.error(f"Error in simulation for trace_set_id={trace_set_id}, instantiation_id={instantiation_id}: {e}")
                             return None
                         
                         # Capture environment state for goal achievement metric
@@ -477,7 +508,8 @@ def compare_tool_sequences_command(toolset_path: str, sequence1: str, sequence2:
             
             # Create embedding config
             embedding_config = {
-                "model": embedding_model
+                "model": embedding_model,
+                "caching": True,
             }
             
             # Create WeightedLevenshteinMetric
@@ -591,7 +623,7 @@ async def compute_trace_alignments(conversations: List[Dict[str, Any]], all_tool
         return
     
     # Create embedding config for weighted Levenshtein
-    embedding_config = {"model": "text-embedding-3-small"}
+    embedding_config = {"model": "text-embedding-3-small", "caching": True}
     tool_definitions = {tool["name"]: tool for tool in all_tools}
     
     # Create WeightedLevenshteinMetric for alignment computation
@@ -606,45 +638,43 @@ async def compute_trace_alignments(conversations: List[Dict[str, Any]], all_tool
         goal_achievement_llm_config = evaluation_config["litellm"]
         goal_metric = GoalAchievementMetric(llm_config=goal_achievement_llm_config)
         enable_goal_achievement = True
-        # Create semaphore for goal achievement evaluation concurrency
-        goal_eval_concurrency = evaluation_config["concurrency"]
-        goal_eval_semaphore = asyncio.Semaphore(goal_eval_concurrency)
     else:
         goal_metric = None
         enable_goal_achievement = False
-        goal_eval_semaphore = None
     
-    # Compute alignments for each trace set
-    all_alignments = {}
-    
-    for trace_set_id, convs in valid_trace_sets.items():
-        logger.info(f"Computing alignment for trace set {trace_set_id} ({len(convs)} instantiations)")
-        
-        # Extract expected tool sequence from trace set metadata
-        trace_set_metadata = convs[0]["trace_set_metadata"]
-        expected_tools = trace_set_metadata["expected_tools"]
-        
-        # Extract actual tool sequences
-        actual_tool_sequences = [conv["used_tools"] for conv in convs]
-        
-        # Compute alignment using expected tools as reference
-        try:
-            alignment_result = await metric.align_multiple_sequences(expected_tools, actual_tool_sequences)
+    # Semaphore for concurrent trace set alignment
+    alignment_concurrency = alignment_config.get("concurrency", 50)
+    alignment_semaphore = asyncio.Semaphore(alignment_concurrency)
+
+    async def align_one_trace_set(trace_set_id, convs):
+        """Helper function to compute alignment for a single trace set."""
+        async with alignment_semaphore:
+            logger.info(f"Computing alignment for trace set {trace_set_id} ({len(convs)} instantiations)")
             
-            # Add metadata
-            alignment_result["trace_set_metadata"] = trace_set_metadata
-            alignment_result["conversation_ids"] = [
-                conversation_id_map.get((trace_set_id, conv.get("instantiation_id")), -1)
-                for conv in convs
-            ]
-            alignment_result["instantiation_count"] = len(convs)
+            # Extract expected tool sequence from trace set metadata
+            trace_set_metadata = convs[0]["trace_set_metadata"]
+            expected_tools = trace_set_metadata["expected_tools"]
             
-            # Compute goal achievement metrics for each conversation if enabled
-            goal_achievement_results = []
-            if enable_goal_achievement and goal_metric:
-                logger.info(f"Computing goal achievement metrics for {len(convs)} conversations in trace set {trace_set_id}")
-                async def evaluate_goal_achievement(conv):
-                    async with goal_eval_semaphore:
+            # Extract actual tool sequences
+            actual_tool_sequences = [conv["used_tools"] for conv in convs]
+            
+            # Compute alignment using expected tools as reference
+            try:
+                alignment_result = await metric.align_multiple_sequences(expected_tools, actual_tool_sequences)
+                
+                # Add metadata
+                alignment_result["trace_set_metadata"] = trace_set_metadata
+                alignment_result["conversation_ids"] = [
+                    conversation_id_map.get((trace_set_id, conv.get("instantiation_id")), -1)
+                    for conv in convs
+                ]
+                alignment_result["instantiation_count"] = len(convs)
+                
+                # Compute goal achievement metrics for each conversation if enabled
+                goal_achievement_results = []
+                if enable_goal_achievement and goal_metric:
+                    logger.info(f"Computing goal achievement metrics for {len(convs)} conversations in trace set {trace_set_id}")
+                    async def evaluate_goal_achievement(conv):
                         try:
                             goal_result = await goal_metric.evaluate(
                                 user_goal=conv["user_goal"],
@@ -665,20 +695,37 @@ async def compute_trace_alignments(conversations: List[Dict[str, Any]], all_tool
                                 "details": {},
                                 "error": str(e)
                             }
+                    
+                    # Run goal achievement evaluations concurrently with bounded concurrency
+                    goal_ach_concurrency = alignment_config.get("goal_achievement_concurrency", (evaluation_config or {}).get("concurrency", 20))
+                    goal_semaphore = asyncio.Semaphore(goal_ach_concurrency)
+                    async def guarded_eval(conv):
+                        async with goal_semaphore:
+                            return await evaluate_goal_achievement(conv)
+                    goal_eval_tasks = [guarded_eval(conv) for conv in convs]
+                    goal_achievement_results = await asyncio.gather(*goal_eval_tasks)
+                    logger.success(f"Completed goal achievement evaluation for trace set {trace_set_id}")
                 
-                # Run goal achievement evaluations concurrently
-                goal_eval_tasks = [evaluate_goal_achievement(conv) for conv in convs]
-                goal_achievement_results = await asyncio.gather(*goal_eval_tasks)
-                logger.success(f"Completed goal achievement evaluation for trace set {trace_set_id}")
-            
-            # Add goal achievement results to alignment result
-            alignment_result["goal_achievement_results"] = goal_achievement_results
-            
-            all_alignments[trace_set_id] = alignment_result
-            
-        except Exception as e:
-            logger.error(f"Error computing alignment for trace set {trace_set_id}: {e}")
-            continue
+                # Add goal achievement results to alignment result
+                alignment_result["goal_achievement_results"] = goal_achievement_results
+                
+                return trace_set_id, alignment_result
+                
+            except Exception as e:
+                logger.error(f"Error computing alignment for trace set {trace_set_id}: {e}")
+                return trace_set_id, None
+    
+    # Create tasks for each valid trace set
+    alignment_tasks = [align_one_trace_set(ts_id, ts_convs) for ts_id, ts_convs in valid_trace_sets.items()]
+
+    # Use tqdm to show progress for trace alignment computation
+    all_alignment_results = await tqdm.gather(
+        *alignment_tasks,
+        desc="Computing trace alignments",
+        unit="trace_set"
+    )
+
+    all_alignments = {ts_id: result for ts_id, result in all_alignment_results if result is not None}
     
     # Save alignments
     alignments_path = os.path.join(output_dir, "trace_alignments.json")
@@ -694,7 +741,7 @@ async def compute_trace_alignments(conversations: List[Dict[str, Any]], all_tool
         goal_results = alignment_data.get("goal_achievement_results", [])
         
         # Calculate alignment statistics using similarity scores from metrics
-        similarities = [a["similarity"] for a in alignments]
+        similarities = [a.get("similarity", 0.0) for a in alignments]
         distances = [a["distance"] for a in alignments]
         
         avg_similarity = sum(similarities) / len(similarities) if similarities else 0

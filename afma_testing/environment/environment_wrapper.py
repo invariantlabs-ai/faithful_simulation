@@ -4,12 +4,13 @@ with additional functionality for testing purposes.
 """
 
 import json
+import pyjson5
 from typing import Dict, Any, List, Optional
 from loguru import logger
 import litellm
 
-from ..simulation.environment import Environment
-from ..simulation.agent import SimulatedEnvironment
+from src.afma.simulation.environment import Environment
+from src.afma.simulation.agent import SimulatedEnvironment
 
 
 class TestableEnvironment(Environment):
@@ -193,10 +194,11 @@ IMPORTANT:
             )
             
             state_text = response.choices[0].message.content.strip()
+            state_text = state_text.replace('```json', '').replace('```', '')
             
             # Try to parse the JSON response
             try:
-                state = json.loads(state_text)
+                state = pyjson5.loads(state_text)
                 logger.info(f"Retrieved simulated state for {len(state)} files")
                 return state
             except json.JSONDecodeError as e:

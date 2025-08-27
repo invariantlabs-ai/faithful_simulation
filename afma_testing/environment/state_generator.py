@@ -4,10 +4,12 @@ of varying difficulty levels for testing purposes.
 """
 
 import json
+import pyjson5
 import random
 from typing import Dict, Any, List
 from loguru import logger
 import litellm
+from pathlib import Path
 
 from .environment_wrapper import TestableEnvironment
 
@@ -94,23 +96,34 @@ CONTENT THEMES:
 - configuration: Settings, config files, environment files
 
 RESPONSE FORMAT:
-Return ONLY a JSON object where:
-- Keys are file paths (relative paths, but always starting with {session_dir}/)
-- Values are the file contents as strings
+Return ONLY a valid JSON object that can be parsed by standard JSON parsers.
+- Keys: file paths (relative paths, always starting with {session_dir}/)
+- Values: file contents as properly escaped JSON strings
+- All paths must be valid filesystem paths (no invalid characters like |, <, >, etc.)
+- Use forward slashes (/) for path separators
+- Ensure proper JSON escaping for special characters in content
+
+JSON ESCAPING RULES:
+- Use \\n for actual newlines in file content
+- Use \\\\ for literal backslash characters
+- Use \\" for literal quote characters
+- Use \\t for tab characters
+- All string values must be properly quoted and escaped
 
 Example:
 {{
-  "{session_dir}/src/README.md": "# Project Overview\n\nThis is a test.",
-  "{session_dir}/src/main.py": "def main():\n    print('Hello World')"
-  "{session_dir}/config/main/info.yaml": "app:\n  name: SampleApp\n  version: 1.0.0\nlogging:\n  level: INFO\n  file: logs/app.log\nfeatures:\n  enable_feature_x: true\n  max_connections: 10"
+  "{session_dir}/src/README.md": "# Project Overview\\n\\nThis is a test project with multiple lines.",
+  "{session_dir}/src/main.py": "def main():\\n    print(\\"Hello World\\")\\n    return 0",
+  "{session_dir}/config/app.yaml": "app:\\n  name: SampleApp\\n  version: 1.0.0\\nlogging:\\n  level: INFO\\n  file: logs/app.log"
 }}
 
-IMPORTANT:
+CRITICAL REQUIREMENTS:
+- Output must be valid, parseable JSON (test with any JSON parser)
+- All file paths must be valid and start with {session_dir}/
+- No missing commas, quotes, or brackets
+- Proper escaping of all special characters in file content
 - Create realistic file structures (use subdirectories when appropriate)
-- Ensure file content matches the file type
-- Keep content concise but meaningful
-- Avoid creating files that would conflict with each other
-- Make the environment interesting and varied
+- Ensure file content matches the file type and is meaningful
 - Do NOT include any files or directories outside of {session_dir}/"""
 
         response = await litellm.acompletion(
@@ -125,76 +138,68 @@ IMPORTANT:
     
     def _parse_state_description(self, description: str) -> Dict[str, str]:
         """Parse the LLM-generated state description into a file dictionary."""
+        # Clean up common formatting issues from LLM responses
+        description = description.strip()
+        # Remove markdown code fences
+        description = description.replace('```json', '').replace('```', '')
+        # Remove any leading/trailing whitespace again after cleanup
+        description = description.strip()
+        
+        # Try multiple parsing approaches, starting with the most flexible
+        parsing_errors = []
+        
+        # First try pyjson5 (most flexible)
         try:
-            # Try to parse as JSON
-            file_states = json.loads(description)
+            file_states = pyjson5.loads(description)
+            logger.debug("Successfully parsed JSON using pyjson5")
+        except Exception as e:
+            parsing_errors.append(f"pyjson5: {e}")
+            logger.debug(f"pyjson5 parsing failed: {e}")
             
-            # Validate the structure
-            if not isinstance(file_states, dict):
-                raise Exception("Generated state is not a dictionary")
-            
-            # Validate each file
-            valid_files = {}
-            for file_path, content in file_states.items():
-                if isinstance(file_path, str) and isinstance(content, str):
-                    valid_files[file_path] = content
-                else:
-                    logger.warning(f"Invalid file entry: {file_path}")
-            
-            return valid_files
-            
-        except json.JSONDecodeError as e:
-            raise Exception(f"Failed to parse state description as JSON: {e}. Description was: {description}")
+            # Fallback to standard json
+            try:
+                file_states = json.loads(description)
+                logger.debug("Successfully parsed JSON using standard json")
+            except json.JSONDecodeError as e:
+                parsing_errors.append(f"json: {e}")
+                error_msg = f"Failed to parse JSON with both pyjson5 and standard json.\nErrors: {'; '.join(parsing_errors)}\nDescription was:\n===\n{description}\n==="
+                raise Exception(error_msg)
+        
+        # Validate the structure
+        if not isinstance(file_states, dict):
+            raise Exception("Generated state is not a dictionary")
+        
+        # Validate each file
+        valid_files = {}
+        for file_path, content in file_states.items():
+            if isinstance(file_path, str) and isinstance(content, str):
+                valid_files[file_path] = content
+            else:
+                logger.warning(f"Invalid file entry: {file_path}")
+        
+        return valid_files
     
     async def _create_files_in_environment(self, file_states: Dict[str, str], environment: TestableEnvironment, session_dir: str):
-        """Create the files in the real environment."""
+        """Create the files in the real environment using standard Python file operations."""
         
-        # First, collect all unique directories that need to be created
-        directories = set()
-        for file_path in file_states.keys():
-            if '/' in file_path:
-                dir_path = '/'.join(file_path.split('/')[:-1])
-                directories.add(dir_path)
-        
-        # Create directories first
-        for dir_path in sorted(directories):
-            try:
-                # Ensure directory is under session_dir
-                if not dir_path.startswith(session_dir):
-                    dir_path = f"{session_dir}/" + dir_path.lstrip("/")
-                logger.debug(f"Creating directory: {dir_path}")
-                result = await environment.call_tool(
-                    "filesystem_create_directory",
-                    json.dumps({"path": dir_path}),
-                    f"create_dir_{dir_path}"
-                )
-                logger.debug(f"Directory creation result: {result}")
-                if result[1].startswith("Error"):
-                    logger.error(f"Failed to create directory {dir_path}: {result[1]}")
-                    raise Exception(f"Failed to create directory {dir_path}: {result[1]}")
-                logger.debug(f"Created directory: {dir_path}")
-            except Exception as e:
-                raise Exception(f"Failed to create directory {dir_path}: {e}")
-        
-        # Create files
+        # Create files directly using pathlib - this will automatically create parent directories
         for file_path, content in file_states.items():
             try:
                 # Ensure file is under session_dir
                 if not file_path.startswith(session_dir):
                     file_path = f"{session_dir}/" + file_path.lstrip("/")
+                
                 logger.debug(f"Creating file: {file_path} with content length: {len(content)}")
-                result = await environment.call_tool(
-                    "filesystem_write_file",
-                    json.dumps({
-                        "path": file_path,
-                        "content": content
-                    }),
-                    f"create_file_{file_path}"
-                )
-                logger.debug(f"File creation result: {result}")
-                if result[1].startswith("Error"):
-                    logger.error(f"Failed to create file {file_path}: {result[1]}")
-                    raise Exception(f"Failed to create file {file_path}: {result[1]}")
+                
+                # Convert to Path object
+                file_path_obj = Path(file_path)
+                
+                # Create parent directories if they don't exist
+                file_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Write the file content
+                file_path_obj.write_text(content, encoding='utf-8')
+                
                 logger.debug(f"Created file: {file_path}")
             except Exception as e:
                 raise Exception(f"Failed to create file {file_path}: {e}")

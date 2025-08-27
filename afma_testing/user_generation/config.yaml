@@ -6,7 +6,7 @@ mcp_config_path: "agent_mcp_configs/complex_agent.json"
 user_generation_testing:
   # LLM configuration for user generation
   generation_litellm:
-    model: gpt-4.1-mini
+    model: gemini/gemini-2.5-flash
     temperature: 0.3
     top_p: 0.9
     timeout: 30
@@ -14,7 +14,7 @@ user_generation_testing:
   
   # LLM configuration for assessment
   assessment_litellm:
-    model: gpt-4.1-mini
+    model: gemini/gemini-2.5-flash
     temperature: 0.1
     top_p: 0.9
     timeout: 30
@@ -23,7 +23,7 @@ user_generation_testing:
   # Test parameters
   test:
     max_concurrent_users: 20
-    results_output_dir: "results/user_generation_testing"
+    results_output_dir: "results/user_generation_testing_gemini/"
     
   # User generation parameters
   user_generation:

@@ -4,6 +4,7 @@ for testing environment simulation accuracy.
 """
 
 import json
+import pyjson5
 from typing import Dict, Any, List, Tuple
 from loguru import logger
 import litellm
@@ -111,7 +112,8 @@ IMPORTANT:
             
             # Parse the JSON response
             try:
-                result = json.loads(response_text)
+                response_text = response_text.replace('```json', '').replace('```', '')
+                result = pyjson5.loads(response_text)
                 task_description = result.get("task_description", "")
                 tool_sequence = result.get("tool_sequence", [])
                 
