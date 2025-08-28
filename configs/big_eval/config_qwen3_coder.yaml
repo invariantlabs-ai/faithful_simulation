@@ -60,7 +60,7 @@ agent:
 
 # Simulation parameters
 simulation:
-  max_turns: 7
+  max_turns: 15
   concurrency: 50
   timeout: 60
   instantiations_per_trace: 1
