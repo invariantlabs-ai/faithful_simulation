@@ -22,42 +22,25 @@ import colorsys
 
 
 def load_model_data(results_dir: Path) -> Dict[str, Dict[str, Any]]:
-    """Load data from model result folders. Can handle both individual model directories and parent directories containing models."""
+    """Load data from a single evaluation directory passed by the user.
+    Uses parent directory name as the model label (pre-last path segment)."""
     model_data = {}
     
     if not results_dir.exists():
         print(f"Results directory does not exist: {results_dir}")
         return model_data
     
-    # Check if this directory itself contains big_eval (i.e., it's a model directory)
-    big_eval_dir = results_dir / "big_eval"
-    if big_eval_dir.exists():
-        # This is a model directory itself
-        print(f"Loading data for model: {results_dir.name}")
-        data = load_single_model_data(big_eval_dir, results_dir.name)
-        if data:
-            model_data[results_dir.name] = data
-    else:
-        # Look for model directories within this directory
-        for model_dir in results_dir.iterdir():
-            if not model_dir.is_dir():
-                continue
-                
-            # Look for big_eval subdirectory
-            big_eval_dir = model_dir / "big_eval"
-            if not big_eval_dir.exists():
-                continue
-                
-            print(f"Loading data for model: {model_dir.name}")
-            data = load_single_model_data(big_eval_dir, model_dir.name)
-            if data:
-                model_data[model_dir.name] = data
+    model_label = results_dir.parent.name if results_dir.parent and results_dir.parent.name else results_dir.name
+    print(f"Loading data for model: {model_label}")
+    data = load_single_model_data(results_dir, model_label)
+    if data:
+        model_data[model_label] = data
     
     return model_data
 
 
-def load_single_model_data(big_eval_dir: Path, model_name: str) -> Dict[str, Any]:
-    """Load data from a single model's big_eval directory."""
+def load_single_model_data(eval_dir: Path, model_name: str) -> Dict[str, Any]:
+    """Load data from a single model's evaluation directory (passed directly)."""
     # Load conversations, trace alignments, and alignment summary
     conversations = []
     trace_alignments = {}
@@ -70,7 +53,7 @@ def load_single_model_data(big_eval_dir: Path, model_name: str) -> Dict[str, Any
     
     # Load conversations
     for filename in conversation_files:
-        filepath = big_eval_dir / filename
+        filepath = eval_dir / filename
         if filepath.exists():
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
@@ -82,7 +65,7 @@ def load_single_model_data(big_eval_dir: Path, model_name: str) -> Dict[str, Any
     
     # Load trace alignments
     for filename in alignment_files:
-        filepath = big_eval_dir / filename
+        filepath = eval_dir / filename
         if filepath.exists():
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
@@ -94,7 +77,7 @@ def load_single_model_data(big_eval_dir: Path, model_name: str) -> Dict[str, Any
     
     # Load alignment summary
     for filename in summary_files:
-        filepath = big_eval_dir / filename
+        filepath = eval_dir / filename
         if filepath.exists():
             try:
                 with open(filepath, 'r', encoding='utf-8') as f:
@@ -286,14 +269,20 @@ def create_radar_chart(user_averages: Dict, env_averages: Dict,
     angles = user_angles + env_angles
     
     # Create figure and axis
-    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(16, 8), subplot_kw=dict(projection='polar'))
+    plt.rcParams.update({
+        'font.size': 19,
+        'axes.titlesize': 26,
+        'axes.labelsize': 22,
+        'legend.fontsize': 17
+    })
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(20, 9.5), subplot_kw=dict(projection='polar'))
     
     # Get model names and colors
     model_names = list(user_averages.keys())
     colors = generate_colors(len(model_names))
     
     # Left chart: Trace Alignment Scores (both user and environment personalities)
-    ax_left.set_title("Trace Alignment Scores", pad=20, fontsize=14, fontweight='bold', color='darkred')
+    ax_left.set_title("Trace Alignment Scores", pad=26, fontsize=26, fontweight='bold', color='darkred')
     
     for model_idx, model_name in enumerate(model_names):
         user_data = user_averages[model_name]
@@ -328,22 +317,25 @@ def create_radar_chart(user_averages: Dict, env_averages: Dict,
     # Configure left chart
     ax_left.set_ylim(0, 1)
     ax_left.set_xticks(angles)
-    ax_left.set_xticklabels(all_personalities, fontsize=10)
+    ax_left.set_xticklabels(all_personalities, fontsize=17)
     ax_left.grid(True, color='darkgrey', alpha=1.0, linewidth=1.0)
     ax_left.set_facecolor('white')
     
     # Add vertical divider line and labels
     ax_left.plot([np.pi/2, np.pi/2], [0, 1], 'k-', linewidth=2, alpha=0.7)  # Top vertical line
     ax_left.plot([3*np.pi/2, 3*np.pi/2], [0, 1], 'k-', linewidth=2, alpha=0.7)  # Bottom vertical line
-    ax_left.text(np.pi, 0.5, 'User', fontsize=12, fontweight='bold', ha='center', va='center', 
+    ax_left.text(np.pi, 0.5, 'User', fontsize=19, fontweight='bold', ha='center', va='center', 
                 bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-    ax_left.text(0, 0.5, 'Environment', fontsize=12, fontweight='bold', ha='center', va='center',
+    ax_left.text(0, 0.5, 'Environment', fontsize=19, fontweight='bold', ha='center', va='center',
                 bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+    # Wrap tick labels with boxes for readability
+    for lbl in ax_left.get_xticklabels():
+        lbl.set_bbox(dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.85))
     
-    ax_left.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
+    ax_left.legend(loc='upper right', bbox_to_anchor=(1.25, 1.1))
     
     # Right chart: Goal Achievement Scores (both user and environment personalities)
-    ax_right.set_title("Goal Achievement Scores", pad=20, fontsize=14, fontweight='bold', color='darkblue')
+    ax_right.set_title("Goal Achievement Scores", pad=26, fontsize=26, fontweight='bold', color='darkblue')
     
     for model_idx, model_name in enumerate(model_names):
         user_data = user_averages[model_name]
@@ -378,21 +370,25 @@ def create_radar_chart(user_averages: Dict, env_averages: Dict,
     # Configure right chart
     ax_right.set_ylim(0, 1)
     ax_right.set_xticks(angles)
-    ax_right.set_xticklabels(all_personalities, fontsize=10)
+    ax_right.set_xticklabels(all_personalities, fontsize=17)
     ax_right.grid(True, color='darkgrey', alpha=1.0, linewidth=1.0)
     ax_right.set_facecolor('white')
     
     # Add vertical divider line and labels
     ax_right.plot([np.pi/2, np.pi/2], [0, 1], 'k-', linewidth=2, alpha=0.7)  # Top vertical line
     ax_right.plot([3*np.pi/2, 3*np.pi/2], [0, 1], 'k-', linewidth=2, alpha=0.7)  # Bottom vertical line
-    ax_right.text(np.pi, 0.5, 'User', fontsize=12, fontweight='bold', ha='center', va='center', 
+    ax_right.text(np.pi, 0.5, 'User', fontsize=19, fontweight='bold', ha='center', va='center', 
                  bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-    ax_right.text(0, 0.5, 'Environment', fontsize=12, fontweight='bold', ha='center', va='center',
+    ax_right.text(0, 0.5, 'Environment', fontsize=19, fontweight='bold', ha='center', va='center',
                  bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+    # Wrap tick labels with boxes for readability
+    for lbl in ax_right.get_xticklabels():
+        lbl.set_bbox(dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.85))
     
-    ax_right.legend(loc='upper left', bbox_to_anchor=(-0.3, 1.1))
+    # Legend only on the left plot to avoid duplication
     
     plt.tight_layout()
+    plt.subplots_adjust(wspace=0.2)
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     

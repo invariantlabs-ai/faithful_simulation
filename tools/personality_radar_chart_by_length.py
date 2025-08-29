@@ -190,14 +190,20 @@ def create_radar_chart_by_length(user_averages_by_length: Dict, env_averages_by_
     
     angles = user_angles + env_angles
     
-    # Create figure and axis
-    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(16, 8), subplot_kw=dict(projection='polar'))
+    # Create figure and axis with larger fonts
+    plt.rcParams.update({
+        'font.size': 19,
+        'axes.titlesize': 26,
+        'axes.labelsize': 22,
+        'legend.fontsize': 17
+    })
+    fig, (ax_left, ax_right) = plt.subplots(1, 2, figsize=(20, 9.5), subplot_kw=dict(projection='polar'))
     
     # Get length names and colors
     colors = generate_colors_for_lengths(len(all_lengths))
     
     # Left chart: Trace Alignment Scores (both user and environment personalities)
-    ax_left.set_title("Trace Alignment Scores\n(by Task Length)", pad=20, fontsize=14, fontweight='bold', color='darkred')
+    ax_left.set_title("Trace Alignment Scores\n(by Task Length)", pad=26, fontsize=26, fontweight='bold', color='darkred')
     
     for length_idx, seq_length in enumerate(all_lengths):
         user_data = user_averages_by_length.get(seq_length, {})
@@ -232,22 +238,25 @@ def create_radar_chart_by_length(user_averages_by_length: Dict, env_averages_by_
     # Configure left chart
     ax_left.set_ylim(0, 1)
     ax_left.set_xticks(angles)
-    ax_left.set_xticklabels(all_personalities, fontsize=10)
+    ax_left.set_xticklabels(all_personalities, fontsize=17)
     ax_left.grid(True, color='darkgrey', alpha=1.0, linewidth=1.0)
     ax_left.set_facecolor('white')
     
     # Add vertical divider line and labels
     ax_left.plot([np.pi/2, np.pi/2], [0, 1], 'k-', linewidth=2, alpha=0.7)  # Top vertical line
     ax_left.plot([3*np.pi/2, 3*np.pi/2], [0, 1], 'k-', linewidth=2, alpha=0.7)  # Bottom vertical line
-    ax_left.text(np.pi, 0.5, 'User', fontsize=12, fontweight='bold', ha='center', va='center', 
+    ax_left.text(np.pi, 0.5, 'User', fontsize=19, fontweight='bold', ha='center', va='center', 
                 bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-    ax_left.text(0, 0.5, 'Environment', fontsize=12, fontweight='bold', ha='center', va='center',
+    ax_left.text(0, 0.5, 'Environment', fontsize=19, fontweight='bold', ha='center', va='center',
                 bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+    # Wrap tick labels with boxes for readability
+    for lbl in ax_left.get_xticklabels():
+        lbl.set_bbox(dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.85))
     
-    ax_left.legend(loc='upper right', bbox_to_anchor=(1.3, 1.1))
+    ax_left.legend(loc='upper right', bbox_to_anchor=(1.25, 1.1))
     
     # Right chart: Goal Achievement Scores (both user and environment personalities)
-    ax_right.set_title("Goal Achievement Scores\n(by Task Length)", pad=20, fontsize=14, fontweight='bold', color='darkblue')
+    ax_right.set_title("Goal Achievement Scores\n(by Task Length)", pad=26, fontsize=26, fontweight='bold', color='darkblue')
     
     for length_idx, seq_length in enumerate(all_lengths):
         user_data = user_averages_by_length.get(seq_length, {})
@@ -282,21 +291,25 @@ def create_radar_chart_by_length(user_averages_by_length: Dict, env_averages_by_
     # Configure right chart
     ax_right.set_ylim(0, 1)
     ax_right.set_xticks(angles)
-    ax_right.set_xticklabels(all_personalities, fontsize=10)
+    ax_right.set_xticklabels(all_personalities, fontsize=17)
     ax_right.grid(True, color='darkgrey', alpha=1.0, linewidth=1.0)
     ax_right.set_facecolor('white')
     
     # Add vertical divider line and labels
     ax_right.plot([np.pi/2, np.pi/2], [0, 1], 'k-', linewidth=2, alpha=0.7)  # Top vertical line
     ax_right.plot([3*np.pi/2, 3*np.pi/2], [0, 1], 'k-', linewidth=2, alpha=0.7)  # Bottom vertical line
-    ax_right.text(np.pi, 0.5, 'User', fontsize=12, fontweight='bold', ha='center', va='center', 
+    ax_right.text(np.pi, 0.5, 'User', fontsize=19, fontweight='bold', ha='center', va='center', 
                  bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
-    ax_right.text(0, 0.5, 'Environment', fontsize=12, fontweight='bold', ha='center', va='center',
+    ax_right.text(0, 0.5, 'Environment', fontsize=19, fontweight='bold', ha='center', va='center',
                  bbox=dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.8))
+    # Wrap tick labels with boxes for readability
+    for lbl in ax_right.get_xticklabels():
+        lbl.set_bbox(dict(boxstyle="round,pad=0.3", facecolor='white', alpha=0.85))
     
-    ax_right.legend(loc='upper left', bbox_to_anchor=(-0.3, 1.1))
+    # Legend only on the left plot to avoid duplication
     
     plt.tight_layout()
+    plt.subplots_adjust(wspace=0.04)
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     
