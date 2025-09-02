@@ -1,6 +1,7 @@
 from typing import Optional, Any, Tuple, Dict, List, Protocol, Union, AbstractSet
 import json
 import pyjson5
+import subprocess
 from abc import ABC, abstractmethod
 import litellm
 from loguru import logger
@@ -20,6 +21,45 @@ class EnvironmentInterface(ABC):
     @abstractmethod
     async def call_tool(self, tool_name: str, arguments: str, tool_call_id: str) -> tuple[str, str]:
         """Call a tool with the given arguments"""
+        pass
+
+
+class McpEnvironment(EnvironmentInterface):
+    def __init__(self, config_path: str, timeout: int = 10):
+        self.config_path = config_path
+        self.timeout = timeout
+        self.tools = None
+        self.prompts = None
+        self.resources = None
+
+    @classmethod
+    def _run_mcp_scan(cls, config_path: str):
+        cmd = ["uvx", "mcp-scan@latest", "inspect", config_path, "--json"]
+        result = subprocess.run(cmd, capture_output=True)
+        return result.stdout
+
+    async def collect_resources(self) -> list[dict[str, Any]]:
+        """Collect resources, prompts, and tools from servers"""
+        if self.tools is not None:
+            return self.tools
+        self.tools = []
+        self.raw_config = json.loads(McpEnvironment._run_mcp_scan(self.config_path))
+        for server in self.raw_config[self.config_path]["servers"]:
+            for tool in server["signature"]["tools"]:
+                self.tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": f"{server["name"]}-{tool["name"]}",
+                            "description": tool['description'],
+                            "parameters": tool['inputSchema']
+                        }
+                    }
+                )
+        return self.tools
+    
+    async def call_tool(self, tool_name: str, arguments: str, tool_call_id: str) -> tuple[str, str]:
+        raise NotImplementedError("missing implementation")
         pass
 
 
@@ -140,8 +180,8 @@ class Environment(EnvironmentInterface):
 
 
 class SimulatedEnvironment(EnvironmentInterface):
-    def __init__(self, mcp_config_path: str, llm_config: dict[str, Any], timeout: int = 10, personality: Optional[str] = None, environment_expectations: Optional[str] = None):
-        self.real_environment = Environment(mcp_config_path, timeout)
+    def __init__(self, real_environment: Environment, llm_config: dict[str, Any], timeout: int = 10, personality: Optional[str] = None, environment_expectations: Optional[str] = None):
+        self.real_environment = real_environment
         self.llm_config = llm_config
         self.tools = None
         self.tools_by_name = {}

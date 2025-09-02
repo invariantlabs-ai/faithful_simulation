@@ -84,12 +84,10 @@ This profile defines **HOW** you interact with the agent. The "Your Character's 
 
         for _ in range(turns):
             agent_response = await agent.talk(user_message)
-
             if "CONVERSATION_COMPLETE" in agent_response:
                 break
 
             user_message = await self.talk(agent_response)
-
             if "CONVERSATION_COMPLETE" in user_message:
                 break
 
