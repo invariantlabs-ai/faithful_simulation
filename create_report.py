@@ -2,6 +2,7 @@ import json
 import html
 from datetime import datetime
 from typing import Dict, List, Any
+import os
 
 def create_simple_trace_html(trace_data: List[Dict[str, Any]], output_file: str = "agent_trace.html"):
     """
@@ -222,13 +223,21 @@ def create_simple_trace_html(trace_data: List[Dict[str, Any]], output_file: str 
 if __name__ == "__main__":
     import sys
     
-    if len(sys.argv) != 2:
+    if len(sys.argv) > 2:
         print("Usage: python create_simple_trace_html.py <trace_file.json>")
         print("Example: python create_simple_trace_html.py my_trace.json")
         sys.exit(1)
     
-    input_file = sys.argv[1]
-    output_file = input_file.replace('.json', '_visualization.html')
+    if len(sys.argv) == 2:
+        input_file = sys.argv[1]
+        output_file = input_file.replace('.json', '_visualization.html')
+    
+    if len(sys.argv) == 1:
+        traces_files = [file for file in os.listdir("traces") if file.endswith(".json")]
+        traces_files.sort()
+        input_file = os.path.join("traces", traces_files[-1])
+        output_file = input_file.replace('.json', '_visualization.html')
+
     
     try:
         with open(input_file, 'r', encoding='utf-8') as f:
