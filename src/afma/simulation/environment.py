@@ -29,7 +29,8 @@ class EnvironmentInterface(ABC):
 class McpEnvironment(EnvironmentInterface):
     def __init__(
         self,
-        config_path: str,
+        config_path: str | None = None,
+        scan_result: ScanPathResult | None = None,
         timeout: int = 10,
         base_url: str = "https://mcp.invariantlabs.ai/",
         storage_file: str = "~/.mcp-scan",
@@ -44,7 +45,12 @@ class McpEnvironment(EnvironmentInterface):
         self.suppress_mcpserver_io = suppress_mcpserver_io
         self.include_built_in = include_built_in
         self.server_timeout = server_timeout
-        self.scan_result: ScanPathResult | None = None
+        self.scan_result = scan_result
+        if config_path is None and scan_result is None:
+            raise ValueError("Either config_path or scan_result must be provided")
+        if config_path is not None and scan_result is not None:
+            raise ValueError("Only one of config_path or scan_result must be provided")
+
 
     async def scan_mcp_file(self):
         scanner = MCPScanner(

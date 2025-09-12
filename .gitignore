@@ -183,3 +183,6 @@ cython_debug/
 # Outputs
 results/
 traces/*
+
+# Data 
+data/
