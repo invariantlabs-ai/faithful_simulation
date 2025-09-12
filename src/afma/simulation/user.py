@@ -12,7 +12,7 @@ import os
 from .agent import Agent
 
 class User:
-    def __init__(self, user_goal: str, environment_expectations: str, llm_config: dict[str, Any], source: list[dict[str, str]], max_turns: int = 10, personality_name: Optional[str] = None, personality: Optional[str] = None):
+    def __init__(self, user_goal: str, environment_expectations: Optional[str], llm_config: dict[str, Any], source: Optional[list[dict[str, str]]], max_turns: int = 10, personality_name: Optional[str] = None, personality: Optional[str] = None):
         self.user_goal = user_goal
         self.environment_expectations = environment_expectations
         self.personality_name = personality_name
@@ -23,7 +23,7 @@ class User:
         self.source = source
         self.max_turns = max_turns
     
-    def _construct_system_prompt(self, user_goal: str, environment_expectations: str, personality_name: Optional[str], personality: Optional[str]) -> str:
+    def _construct_system_prompt(self, user_goal: str, environment_expectations: Optional[str], personality_name: Optional[str], personality: Optional[str]) -> str:
         """Construct system prompt based on user goal, environment expectations, and optional personality."""
         base_prompt = f"""
 You are an AI assistant role-playing as a user to test another AI agent. Your performance will be judged based on how well you stay in character.
