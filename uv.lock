@@ -35,7 +35,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "matplotlib", specifier = ">=3.10.3" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.6.0" },
-    { name = "mcp-scan", specifier = ">=0.3.10" },
+    { name = "mcp-scan", specifier = ">=0.3.13" },
     { name = "networkx", specifier = ">=3.5" },
     { name = "pandas", specifier = ">=2.0.0" },
     { name = "plotly", specifier = ">=6.1.2" },
@@ -1041,7 +1041,7 @@ cli = [
 
 [[package]]
 name = "mcp-scan"
-version = "0.3.10"
+version = "0.3.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -1062,9 +1062,9 @@ dependencies = [
     { name = "types-aiofiles" },
     { name = "uvicorn" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/79/0c/d5ce3efb0a64d2ba39f2a28edbac026a6c5b8ec64393cdbba9ce21eb9007/mcp_scan-0.3.10.tar.gz", hash = "sha256:70829a3a58dd3510a109b2607001c0f441aa56ca7398d72eb89362767e74eef1", size = 334692, upload-time = "2025-09-08T12:51:09.48Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/e9/6d2aebcb9c3d036524f7e158b68627a3dbe3a82ba8ca736e65e7882c9ccb/mcp_scan-0.3.13.tar.gz", hash = "sha256:33555c8a59c0eed1ec706f518ae9e5cac699bc45a5004dfd3e9bb35047e94d80", size = 337101, upload-time = "2025-09-16T13:37:11.262Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/1c/43/927b1cbbb6c9d42dfabe2e833aa35722c0be4d4e926694c24bd06331f37d/mcp_scan-0.3.10-py3-none-any.whl", hash = "sha256:e05ab87b87040780a366543173e7e03fcbac0e3c1ca4c7782f16286331a77497", size = 62405, upload-time = "2025-09-08T12:51:08.494Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/c4/4ad09b68a9ae8e3e1e5c8002bc100bb708c3ddd844e1be46cec4b6d9fd71/mcp_scan-0.3.13-py3-none-any.whl", hash = "sha256:f377793e828d865a5d143e513ba6717baf2cf5f0d146b91be598f4680c6a7e7e", size = 63816, upload-time = "2025-09-16T13:37:10.251Z" },
 ]
 
 [[package]]

@@ -73,12 +73,13 @@ class McpEnvironment(EnvironmentInterface):
         assert self.scan_result is not None
         tools_signatures = []
         for server in self.scan_result.servers:
+
             for entity in server.signature.entities:
                 tool = entity_to_tool(entity)
                 tools_signatures.append({
                     "type": "function",
                     "function": {
-                        "name": server.name + "-" + tool.name.replace("-", "_").replace(" ", "_").lower(),
+                        "name": server.name.replace("-", "_").replace(" ", "_").lower() + "-" + tool.name.replace("-", "_").replace(" ", "_").lower(),
                         "description": tool.description,
                         "parameters": tool.inputSchema,
                     }
