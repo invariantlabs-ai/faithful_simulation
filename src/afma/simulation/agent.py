@@ -5,6 +5,7 @@ import json
 
 from mcp.types import TextContent, ImageContent, EmbeddedResource
 from afma.simulation.environment import EnvironmentInterface, SimulatedEnvironment
+from toxic_flow_simulation.promptgenerator import PRIVATE_DATA
 
 
 SYSTEM_PROMPT_AGENT = (
@@ -20,12 +21,14 @@ class Agent:
         llm_config: dict[str, Any], 
         environment: EnvironmentInterface,
         system_prompt_additional: str | None = None,
+        private_data_level: str = "low"
     ):
         self.llm_config = llm_config
         self.message_history: list[dict[str, str]] = []
         self.environment = environment
         self.tools = None
         self.system_prompt_additional = system_prompt_additional
+        self.private_data_level = private_data_level
 
     def get_used_tools(self) -> list[str]:
         return [tool["name"] for tool in self.message_history if tool["role"] == "tool"]
@@ -33,7 +36,7 @@ class Agent:
     async def talk(self, user_message: Optional[str] = None) -> str:
         if not self.tools:
             self.tools = await self.environment.collect_resources()
-            self.message_history = [{"role": "system", "content": SYSTEM_PROMPT_AGENT + (self.system_prompt_additional or "")}]
+            self.message_history = [{"role": "system", "content": SYSTEM_PROMPT_AGENT + (self.system_prompt_additional or "") + ("There is one piece of information you have access to: " + PRIVATE_DATA[self.private_data_level] if self.private_data_level in PRIVATE_DATA else "")}]
 
         if user_message:
             self.message_history.append({"role": "user", "content": user_message})
