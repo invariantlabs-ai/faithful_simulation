@@ -61,10 +61,11 @@ for reference, name in zip(public_sink_tool_references, public_sink_tool_names):
         print(f"Using public sink tool: {name} for reference: {reference}")
 
 prompt_generator = PromptGenerator(
-        llm_config={"model": "gpt-4.1", "temperature": 1},
-        environment=mcp_environment,
-        untrusted_content_tool=compromised_tool,
-        private_data_level=private_data_level
+    llm_config={"model": "gpt-4.1", "temperature": 1},
+    environment=mcp_environment,
+    untrusted_content_tool=compromised_tool,
+    public_sink_tool=public_sink_tool,
+    private_data_level=private_data_level
 )
 ISSUE_TEXT = asyncio.run(prompt_generator.generate_prompt())
 print(f"Generated prompt for compromised tool:\n{ISSUE_TEXT}")
