@@ -29,32 +29,29 @@ class Agent:
 
     def get_used_tools(self) -> list[str]:
         return [tool["name"] for tool in self.message_history if tool["role"] == "tool"]
+    
+    async def _get_tools(self) -> list[dict[str, Any]]:
+        return await self.environment.collect_resources()
 
     async def talk(self, user_message: Optional[str] = None) -> str:
-        if not self.tools:
-            self.tools = await self.environment.collect_resources()
-            self.message_history = [{"role": "system", "content": SYSTEM_PROMPT_AGENT + (self.system_prompt_additional or "")}]
-
         if user_message:
             self.message_history.append({"role": "user", "content": user_message})
 
-        # Initial LLM call
-        response = await litellm.acompletion(
-            messages=self.message_history,
-            tools=self.tools,
-            **self.llm_config
-        )
-        response_message = response.choices[0].message
-        tool_calls = response_message.tool_calls
-
-        # Loop to handle multiple rounds of tool calls
-        while tool_calls:
+        if self.message_history[-1]["role"] in ["user", "tool"]:
+            # Initial LLM call
+            response = await litellm.acompletion(
+                messages=self.message_history,
+                tools=self.tools,
+                **self.llm_config
+            )
+            response_message = response.choices[0].message
             self.message_history.append(response_message.json())
-
-            for tool_call in tool_calls:
-                tool_call_id = tool_call.id
-                tool_call_name = tool_call.function.name
-                tool_call_args = tool_call.function.arguments
+        # Loop to handle multiple rounds of tool calls
+        while self.message_history[-1].get("tool_calls", False):
+            for tool_call in self.message_history[-1]["tool_calls"]:
+                tool_call_id = tool_call["id"]
+                tool_call_name = tool_call["function"]["name"]
+                tool_call_args = tool_call["function"]["arguments"]
 
                 call_id, tool_call_result = await self.environment.call_tool(tool_call_name, tool_call_args, tool_call_id)
 
@@ -66,15 +63,13 @@ class Agent:
                     "content": tool_call_result
                 })
 
+
             # Get next response after tool calls
             response = await litellm.acompletion(
-                messages=self.message_history,
+                messages=[{"role": "system", "content": SYSTEM_PROMPT_AGENT + (self.system_prompt_additional or "")}] + self.message_history,
                 tools=self.tools,
                 **self.llm_config
             )
             response_message = response.choices[0].message
-            tool_calls = response_message.tool_calls
-
-        # Add the final assistant message to history
-        self.message_history.append({"role": "assistant", "content": response_message.content})
-        return response_message.content
+            self.message_history.append(response_message.json())
+        return self.message_history[-1]["content"]

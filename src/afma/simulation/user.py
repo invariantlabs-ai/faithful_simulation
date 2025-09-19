@@ -80,7 +80,8 @@ This profile defines **HOW** you interact with the agent. The "Your Character's 
     async def talk_with(self, agent: Agent, max_turns: Optional[int] = None) -> list[dict[str, str]]:
         """Talk with an agent for up to max_turns rounds."""
         turns = max_turns if max_turns is not None else self.max_turns
-        user_message = await self.talk()
+        if self.message_history[-1]["role"] != "user":
+            user_message = await self.talk()
 
         for _ in range(turns):
             agent_response = await agent.talk(user_message)

@@ -4,6 +4,7 @@ import litellm
 from loguru import logger
 
 from afma.simulation.environment import McpEnvironment, SimulatedEnvironment
+from afma.simulation.agent import Agent
 
 class SimulatedEnvironmentWithCompromisedTools(SimulatedEnvironment):
     def __init__(
@@ -79,3 +80,31 @@ Execute the '{tool_name}' tool operation with the given arguments and respond wi
                 return obj.replace("DATA", data)
             else:
                 return obj
+
+
+def setup_history(agent: Agent, env: SimulatedEnvironment, message_history: list[dict[str, str]]):
+    """
+    This function injects the message history into the agent and the environment
+    """
+    agent.message_history = message_history
+    tool_calls = []
+    tool_outputs = []
+    for message in message_history:
+        if message["role"] == "assistant":
+            for tool_call in message.get("tool_calls", []):
+                tool_calls.append(tool_call)
+        if message["role"] == "tool":
+            tool_outputs.append(message)
+    for tool_call in tool_calls:
+        for tool_output in tool_outputs:
+            if tool_call["id"] == tool_output["tool_call_id"]:
+                print(f"TOOL CALL: {tool_call}")
+                env.state.append({
+                    "tool_name": tool_call["function"]["name"],
+                    "arguments": tool_call["function"]["arguments"],
+                    "response": tool_output["content"]
+                })
+                break
+        else:
+            raise ValueError(f"Tool call {tool_call['id']} not found in tool outputs")
+
