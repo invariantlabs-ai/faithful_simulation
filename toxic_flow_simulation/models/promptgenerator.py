@@ -1,9 +1,7 @@
 from typing import Any
 import json
 from loguru import logger
-import asyncio
 import litellm
-from mcp_scan.models import entity_to_tool
 
 from afma.simulation.environment import McpEnvironment
 
