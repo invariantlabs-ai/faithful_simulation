@@ -1,5 +1,3 @@
-from typing import Any
-
 def get_initial_messages(role: str, tool_name: str, tool_arguments: str, prompt_injection: str) -> list[dict[str, str]]:
     if role not in ["user", "assistant"]:
         raise ValueError("Role must be either 'user' or 'assistant'")

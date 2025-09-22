@@ -86,7 +86,7 @@ def setup_history(agent: Agent, env: SimulatedEnvironment, message_history: list
     """
     This function injects the message history into the agent and the environment
     """
-    agent.message_history = message_history
+    agent.message_history.extend(message_history)
     tool_calls = []
     tool_outputs = []
     for message in message_history:

@@ -5,6 +5,7 @@ import json
 
 from mcp.types import TextContent, ImageContent, EmbeddedResource
 from afma.simulation.environment import EnvironmentInterface, SimulatedEnvironment
+from toxic_flow_simulation.models.promptgenerator import PRIVATE_DATA
 
 
 SYSTEM_PROMPT_AGENT = (
@@ -20,12 +21,14 @@ class Agent:
         llm_config: dict[str, Any], 
         environment: EnvironmentInterface,
         system_prompt_additional: str | None = None,
+        private_data_level: str = "low"
     ):
         self.llm_config = llm_config
-        self.message_history: list[dict[str, str]] = []
         self.environment = environment
         self.tools = None
         self.system_prompt_additional = system_prompt_additional
+        self.private_data_level = private_data_level
+        self.message_history: list[dict[str, str]] = [{"role": "system", "content": self._create_system_message()}]
 
     def get_used_tools(self) -> list[str]:
         return [tool["name"] for tool in self.message_history if tool["role"] == "tool"]
@@ -33,7 +36,13 @@ class Agent:
     async def _get_tools(self) -> list[dict[str, Any]]:
         return await self.environment.collect_resources()
 
+    def _create_system_message(self) -> str:
+        return SYSTEM_PROMPT_AGENT + (self.system_prompt_additional or "") + ("There is one piece of information you have access to: " + PRIVATE_DATA[self.private_data_level] if self.private_data_level in PRIVATE_DATA else "")
+
     async def talk(self, user_message: Optional[str] = None) -> str:
+        if self.tools is None:
+            self.tools = await self._get_tools()
+
         if user_message:
             self.message_history.append({"role": "user", "content": user_message})
 
@@ -66,7 +75,7 @@ class Agent:
 
             # Get next response after tool calls
             response = await litellm.acompletion(
-                messages=[{"role": "system", "content": SYSTEM_PROMPT_AGENT + (self.system_prompt_additional or "")}] + self.message_history,
+                messages=self.message_history,
                 tools=self.tools,
                 **self.llm_config
             )
