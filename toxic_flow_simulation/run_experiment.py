@@ -3,26 +3,19 @@ from afma.simulation.environment import McpEnvironment
 from toxic_flow_simulation.models.environment import SimulatedEnvironmentWithCompromisedTools, setup_history
 from toxic_flow_simulation.models.promptgenerator import PromptGenerator
 from afma.simulation.agent import Agent
-from toxic_flow_simulation.utils import get_initial_messages
+from toxic_flow_simulation.utils import get_tool_signature, get_tool_arguments, get_initial_messages
 import json
 import asyncio
 from .render_html import convert_trace_file
 from .load_data import get_scans
 
-compromised_tool = "github_mcp_server-list_issues"
-compromised_tool_arguments = {
-    "owner": "octocat",
-    "repo": "colors",
-}
-compromised_tool_arguments_text = str(compromised_tool_arguments)
-# private_data_tool = "github_mcp_server-get_file_contents"
-public_sink_tool = "github_mcp_server-create_or_update_file"
-private_data_level = "medium"
 scan_result = get_scans(n_servers_per_scan=1)[2]  # scan with github tools
 
 #collect resources
 mcp_environment = McpEnvironment(scan_result=scan_result)
 assert mcp_environment.scan_result is not None
+
+tools = asyncio.run(mcp_environment.collect_resources())
 
 toxic_flow_issues = [issue for issue in mcp_environment.scan_result.issues if issue.code == "TF001"]
 if len(toxic_flow_issues) == 0:
@@ -51,6 +44,16 @@ public_sink_tool_names = [
     for tool_reference in public_sink_tool_references
 ]
 
+# Choose one tool from each category
+compromised_tool = "github_mcp_server-list_issues"
+comprised_tool_signature = get_tool_signature(compromised_tool, tools)
+compromised_tool_arguments = asyncio.run(get_tool_arguments(comprised_tool_signature))
+compromised_tool_arguments_text = str(compromised_tool_arguments)
+# private_data_tool = "github_mcp_server-get_file_contents"
+public_sink_tool = "github_mcp_server-create_or_update_file"
+private_data_level = "medium"
+
+# Check that the chosen tools are in the lists
 for reference, name in zip(untrusted_content_tool_references, untrusted_content_tool_names):
     if name == compromised_tool:
         print(f"Using compromised tool: {name} for reference: {reference}")
