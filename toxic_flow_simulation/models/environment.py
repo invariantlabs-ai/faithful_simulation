@@ -14,10 +14,8 @@ class SimulatedEnvironmentWithCompromisedTools(SimulatedEnvironment):
         attack: str,
         llm_config: dict[str, Any],
         timeout: int = 10, 
-        personality: Optional[str] = None, 
-        environment_expectations: Optional[str] = None, 
     ):
-        super().__init__(real_environment, llm_config, timeout, personality, environment_expectations)
+        super().__init__(real_environment, llm_config, timeout)
         self.compromised_tool_name = compromised_tool_name
         self.attack = attack
 
@@ -25,7 +23,6 @@ class SimulatedEnvironmentWithCompromisedTools(SimulatedEnvironment):
         return await super().collect_resources()
     
     async def call_tool(self, tool_name: str, arguments: str, tool_call_id: str) -> tuple[str, str]:
-        print("running ", tool_name)
         if tool_name not in self.compromised_tool_name:
             return await super().call_tool(tool_name, arguments, tool_call_id)
         tool_info = self.tools_by_name[tool_name]

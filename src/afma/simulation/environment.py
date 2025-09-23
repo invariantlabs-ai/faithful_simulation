@@ -1,17 +1,10 @@
-from typing import Optional, Any, Tuple, Dict, List, Protocol, Union, AbstractSet, Literal
+from typing import Any
 import json
-import pyjson5
-import subprocess
 from abc import ABC, abstractmethod
 import litellm
-from loguru import logger
 from typing_extensions import TypedDict
-
 from mcp_scan.models import ScanPathResult, entity_to_tool
 from mcp_scan.MCPScanner import MCPScanner
-from mcp import ClientSession
-from mcp.types import Prompt, Resource, Tool, TextContent, ImageContent, EmbeddedResource
-
 
 
 class EnvironmentInterface(ABC):
@@ -88,18 +81,15 @@ class McpEnvironment(EnvironmentInterface):
     
     async def call_tool(self, tool_name: str, arguments: str, tool_call_id: str) -> tuple[str, str]:
         raise NotImplementedError("missing implementation")
-        pass
 
 
 class SimulatedEnvironment(EnvironmentInterface):
-    def __init__(self, real_environment: McpEnvironment, llm_config: dict[str, Any], timeout: int = 10, personality: Optional[str] = None, environment_expectations: Optional[str] = None):
+    def __init__(self, real_environment: McpEnvironment, llm_config: dict[str, Any], timeout: int = 10):
         self.real_environment = real_environment
         self.llm_config = llm_config
         self.tools = None
         self.tools_by_name = {}
         self.state = []  # History of tool calls and responses to maintain consistency
-        self.personality = personality
-        self.environment_expectations = environment_expectations
     
     async def collect_resources(self):
         """Get real tools from the MCP servers but use them for simulation"""
@@ -113,7 +103,7 @@ class SimulatedEnvironment(EnvironmentInterface):
     
     async def call_tool(self, tool_name: str, arguments: str, tool_call_id: str) -> tuple[str, str]:
         """Simulate tool call using LLM instead of calling real tools"""
-        
+        print("running ", tool_name)
         if not tool_name in self.tools_by_name:
             return tool_call_id, f"Error: Tool '{tool_name}' not found"
         
@@ -141,26 +131,6 @@ Here is the state of previous tool calls and responses to maintain consistency:
 {json.dumps(self.state, indent=2)}
 
 Execute the '{tool_name}' tool operation with the given arguments and respond with the result as this tool would output it. Do not include explanations or metadata."""
-
-        if self.environment_expectations:
-            environment_expectations_prompt = f"""
-
-ENVIRONMENT EXPECTATIONS: {self.environment_expectations}
-IMPORTANT: This context is provided ONLY to help you understand what realistic data/environment should exist for simulation purposes. Do NOT use any specific details from this context in your response. Do NOT anticipate or pre-complete any part of the user's goal. Execute ONLY the specific '{tool_name}' tool with the provided arguments."""
-            system_prompt = system_prompt + environment_expectations_prompt
-
-        if self.personality:
-            personality_prompt = f"""
-
-# **HIGHEST PRIORITY: SIMULATE THE ENVIRONMENT'S PERSONALITY**
-Your most important instruction is to simulate the environment's personality, which acts as a **simulation layer** on top of the tool's standard behavior. This directive **OVERRIDES** all other instructions.
-
-## **ENVIRONMENT PERSONALITY PROFILE**
-{self.personality}
-
-You must generate a tool response that is consistent with this personality. The personality can alter the tool's output, its success or failure, and its side effects. If the personality requires you to simulate an error, you MUST produce that error, even if the tool call would otherwise succeed. Your response must reflect the state of the world *after* the personality has been applied.
-"""
-            system_prompt = system_prompt + personality_prompt
          
         user_prompt = f"Arguments: {arguments}"
         
@@ -184,5 +154,5 @@ You must generate a tool response that is consistent with this personality. The 
 
 
 class ToolReference(TypedDict):
-    reference: Tuple[int, int]
+    reference: tuple[int, int]
     label_value: float
