@@ -37,7 +37,7 @@ class Agent:
         return await self.environment.collect_resources()
 
     def _create_system_message(self) -> str:
-        return SYSTEM_PROMPT_AGENT + (self.system_prompt_additional or "") + ("There is one piece of information you have access to: " + PRIVATE_DATA[self.private_data_level] if self.private_data_level in PRIVATE_DATA else "")
+        return SYSTEM_PROMPT_AGENT + (self.system_prompt_additional or "") + (" There is one piece of information you have access to: " + PRIVATE_DATA[self.private_data_level] if self.private_data_level in PRIVATE_DATA else "")
 
     async def talk(self, user_message: Optional[str] = None) -> str:
         if self.tools is None:
