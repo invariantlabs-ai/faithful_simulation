@@ -15,8 +15,10 @@ class SimulatedEnvironmentWithCompromisedTools(SimulatedEnvironment):
         attack: str,
         llm_config: dict[str, Any],
         timeout: int = 10, 
+        personality: Optional[str] = None, 
+        environment_expectations: Optional[str] = None, 
     ):
-        super().__init__(real_environment, llm_config, timeout)
+        super().__init__(real_environment, llm_config, timeout, personality, environment_expectations)
         self.compromised_tool_name = compromised_tool_name
         self.attack = attack
 
