@@ -6,6 +6,7 @@ import json
 from mcp.types import TextContent, ImageContent, EmbeddedResource
 from afma.simulation.environment import EnvironmentInterface, SimulatedEnvironment
 from toxic_flow_simulation.models.promptgenerator import PRIVATE_DATA
+from toxic_flow_simulation.utils import compute_cost
 
 
 SYSTEM_PROMPT_AGENT = (
@@ -53,6 +54,7 @@ class Agent:
                 tools=self.tools,
                 **self.llm_config
             )
+            compute_cost(response)
             response_message = response.choices[0].message
             self.message_history.append(response_message.json())
         # Loop to handle multiple rounds of tool calls
@@ -79,6 +81,7 @@ class Agent:
                 tools=self.tools,
                 **self.llm_config
             )
+            compute_cost(response)
             response_message = response.choices[0].message
             self.message_history.append(response_message.json())
         return self.message_history[-1]["content"]

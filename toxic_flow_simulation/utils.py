@@ -1,6 +1,14 @@
 from typing import Any
 import json
 import litellm
+from litellm.cost_calculator import completion_cost
+import os
+
+def compute_cost(result):
+    cost = float(os.environ["COST"])
+    cost += completion_cost(result)
+    os.environ["COST"] = str(cost)
+
 
 def get_tool_signature(tool_name: str, tools: list[dict[str, Any]]) -> dict[str, Any]:
     for tool in tools:
@@ -20,6 +28,7 @@ async def get_tool_arguments(tool: dict[str, Any]) -> dict[str, str]:
         model="gpt-4.1",
         temperature=0.7,
     )
+    compute_cost(response)
     try:
         arguments = json.loads(response.choices[0].message.content)
     except json.JSONDecodeError as e:
@@ -45,6 +54,7 @@ async def get_user_prompt(tool_name: str, tool_arguments: str) -> str:
         model="gpt-4.1",
         temperature=0.7,
     )
+    compute_cost(response)
     user_prompt = response.choices[0].message.content
     if not user_prompt:
         raise ValueError("Failed to generate user message")

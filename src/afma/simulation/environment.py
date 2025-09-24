@@ -5,6 +5,7 @@ import litellm
 from typing_extensions import TypedDict
 from mcp_scan.models import ScanPathResult, entity_to_tool
 from mcp_scan.MCPScanner import MCPScanner
+from toxic_flow_simulation.utils import compute_cost
 
 
 class EnvironmentInterface(ABC):
@@ -141,6 +142,7 @@ Execute the '{tool_name}' tool operation with the given arguments and respond wi
             ],
             **self.llm_config
         )
+        compute_cost(response)
         
         result = response.choices[0].message.content
         

@@ -3,6 +3,7 @@ import json
 import asyncio
 from loguru import logger
 import random
+import os
 
 from mcp_scan.models import ScanPathResult, Issue
 from afma.simulation.environment import McpEnvironment
@@ -14,6 +15,7 @@ from toxic_flow_simulation.utils import get_tool_signature, get_tool_arguments, 
 from toxic_flow_simulation.render_html import convert_trace_file
 from toxic_flow_simulation.load_data import get_scans
 
+os.environ["COST"] = "0.0"
 
 def _process_name(name: str) -> str:
     return name.replace("-", "_").replace(" ", "_").lower()
@@ -116,6 +118,7 @@ async def main(mcp_environment: McpEnvironment, untrusted_content_tool: str, pub
     with open(path, "w") as f:
         json.dump(history, f, indent=2)
 
+    print(f"Total cost: {os.environ['COST']}")
     convert_trace_file(path, path.replace(".json", ".html"), "Compromised Tools Trace")
     
 if __name__ == "__main__":

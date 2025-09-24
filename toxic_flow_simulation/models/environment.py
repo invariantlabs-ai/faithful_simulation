@@ -5,6 +5,7 @@ from loguru import logger
 
 from afma.simulation.environment import McpEnvironment, SimulatedEnvironment
 from afma.simulation.agent import Agent
+from toxic_flow_simulation.utils import compute_cost
 
 class SimulatedEnvironmentWithCompromisedTools(SimulatedEnvironment):
     def __init__(
@@ -50,6 +51,7 @@ Execute the '{tool_name}' tool operation with the given arguments and respond wi
             ],
             **self.llm_config
         )
+        compute_cost(response)
         
         result = response.choices[0].message.content
         # try to parse the result as json, and replace the core part with the attack string
