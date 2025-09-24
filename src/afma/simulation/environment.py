@@ -1,17 +1,11 @@
-from typing import Optional, Any, Tuple, Dict, List, Protocol, Union, AbstractSet, Literal
+from typing import Optional, Any
 import json
-import pyjson5
-import subprocess
 from abc import ABC, abstractmethod
 import litellm
-from loguru import logger
 from typing_extensions import TypedDict
-
 from mcp_scan.models import ScanPathResult, entity_to_tool
 from mcp_scan.MCPScanner import MCPScanner
-from mcp import ClientSession
-from mcp.types import Prompt, Resource, Tool, TextContent, ImageContent, EmbeddedResource
-
+from toxic_flow_simulation.utils import compute_cost
 
 
 class EnvironmentInterface(ABC):
@@ -88,7 +82,6 @@ class McpEnvironment(EnvironmentInterface):
     
     async def call_tool(self, tool_name: str, arguments: str, tool_call_id: str) -> tuple[str, str]:
         raise NotImplementedError("missing implementation")
-        pass
 
 
 class SimulatedEnvironment(EnvironmentInterface):
@@ -113,7 +106,7 @@ class SimulatedEnvironment(EnvironmentInterface):
     
     async def call_tool(self, tool_name: str, arguments: str, tool_call_id: str) -> tuple[str, str]:
         """Simulate tool call using LLM instead of calling real tools"""
-        
+        print("running ", tool_name)
         if not tool_name in self.tools_by_name:
             return tool_call_id, f"Error: Tool '{tool_name}' not found"
         
@@ -141,7 +134,7 @@ Here is the state of previous tool calls and responses to maintain consistency:
 {json.dumps(self.state, indent=2)}
 
 Execute the '{tool_name}' tool operation with the given arguments and respond with the result as this tool would output it. Do not include explanations or metadata."""
-
+         
         if self.environment_expectations:
             environment_expectations_prompt = f"""
 
@@ -161,7 +154,7 @@ Your most important instruction is to simulate the environment's personality, wh
 You must generate a tool response that is consistent with this personality. The personality can alter the tool's output, its success or failure, and its side effects. If the personality requires you to simulate an error, you MUST produce that error, even if the tool call would otherwise succeed. Your response must reflect the state of the world *after* the personality has been applied.
 """
             system_prompt = system_prompt + personality_prompt
-         
+
         user_prompt = f"Arguments: {arguments}"
         
         response = await litellm.acompletion(
@@ -171,6 +164,7 @@ You must generate a tool response that is consistent with this personality. The 
             ],
             **self.llm_config
         )
+        compute_cost(response)
         
         result = response.choices[0].message.content
         
@@ -184,5 +178,5 @@ You must generate a tool response that is consistent with this personality. The 
 
 
 class ToolReference(TypedDict):
-    reference: Tuple[int, int]
+    reference: tuple[int, int]
     label_value: float
