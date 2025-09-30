@@ -1,0 +1,24 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+
+        {
+            "name": "Python Debugger: Load Data",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/toxic_flow_simulation/load_data.py",
+            "console": "integratedTerminal",
+            "args": ["data/playwright_github_output.jsonl", "data/playwright_github_output_with_scan.jsonl"]
+        },
+        {
+            "name": "Python Debugger: Analyze",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/toxic_flow_simulation/analyze.py",
+            "env": {"GEMINI_API_KEY": "AIzaSyBUwsnnwTOGO91HXMdo0voYDiAiiBCRBAY"}
+        }
+    ]
+}

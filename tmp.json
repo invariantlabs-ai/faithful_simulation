@@ -1,0 +1,154 @@
+{
+    "name": "create_issue",
+    "title": null,
+    "description": "Create a new issue in a GitHub repository.",
+    "inputSchema": {
+        "properties": {
+            "assignees": {
+                "description": "Usernames to assign to this issue",
+                "items": {
+                    "type": "string"
+                },
+                "type": "array"
+            },
+            "body": {
+                "description": "Issue body content",
+                "type": "string"
+            },
+            "labels": {
+                "description": "Labels to apply to this issue",
+                "items": {
+                    "type": "string"
+                },
+                "type": "array"
+            },
+            "milestone": {
+                "description": "Milestone number",
+                "type": "number"
+            },
+            "owner": {
+                "description": "Repository owner",
+                "type": "string"
+            },
+            "repo": {
+                "description": "Repository name",
+                "type": "string"
+            },
+            "title": {
+                "description": "Issue title",
+                "type": "string"
+            },
+            "type": {
+                "description": "Type of this issue",
+                "type": "string"
+            }
+        },
+        "required": [
+            "owner",
+            "repo",
+            "title"
+        ],
+        "type": "object"
+    },
+    "outputSchema": {
+        "responses": {
+            "201": {
+                "description": "Issue successfully created.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                                "id",
+                                "url"
+                            ],
+                            "properties": {
+                                "id": {
+                                    "type": "string",
+                                    "description": "The unique GitHub issue ID (stringified).",
+                                    "example": "1987654321"
+                                },
+                                "url": {
+                                    "type": "string",
+                                    "format": "uri",
+                                    "description": "HTML URL of the created issue.",
+                                    "example": "https://github.com/owner/repo/issues/123"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "400": {
+                "description": "Bad request (missing or invalid parameters).",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                                "error"
+                            ],
+                            "properties": {
+                                "error": {
+                                    "type": "string",
+                                    "description": "Human-readable error message."
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "502": {
+                "description": "Upstream GitHub error while creating the issue.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                                "error"
+                            ],
+                            "properties": {
+                                "error": {
+                                    "type": "string",
+                                    "description": "Human-readable error message."
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "500": {
+                "description": "Internal server error.",
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                                "error"
+                            ],
+                            "properties": {
+                                "error": {
+                                    "type": "string",
+                                    "description": "Human-readable error message."
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "annotations": {
+        "title": "Open new issue",
+        "readOnlyHint": false,
+        "destructiveHint": null,
+        "idempotentHint": null,
+        "openWorldHint": null
+    },
+    "meta": null,
+    "meta": null
+}``

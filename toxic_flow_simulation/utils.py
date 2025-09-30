@@ -16,7 +16,7 @@ def get_tool_signature(tool_name: str, tools: list[dict[str, Any]]) -> dict[str,
             return tool
     raise ValueError(f"Tool {tool_name} not found")
 
-async def get_tool_arguments(tool: dict[str, Any]) -> dict[str, str]:
+async def get_tool_arguments(tool: dict[str, Any], llm_config: dict[str, Any]) -> dict[str, str]:
     prompt = f"""
     You are an AI assistant. Your task is to come up with realistic arguments for a tool based on its signature. You do not need to provide all arguments but only the arguments necessary to call the tool.
     The tool signature is as follows:
@@ -25,8 +25,7 @@ async def get_tool_arguments(tool: dict[str, Any]) -> dict[str, str]:
     """
     response = await litellm.acompletion(
         messages=[{"role": "system", "content": prompt}],
-        model="gpt-4.1",
-        temperature=0.7,
+        **llm_config,
     )
     compute_cost(response)
     try:
@@ -35,7 +34,11 @@ async def get_tool_arguments(tool: dict[str, Any]) -> dict[str, str]:
         raise ValueError(f"Failed to parse tool arguments: {e}")
     return arguments
 
-async def get_user_prompt(tool_name: str, tool_arguments: str) -> str:
+async def get_user_prompt(
+    tool_name: str,
+    tool_arguments: str,
+    llm_config: dict[str, Any]
+) -> str:
     prompt = f"""
     You are an AI assistant role-playing as a user to test another AI agent. 
 
@@ -51,8 +54,7 @@ async def get_user_prompt(tool_name: str, tool_arguments: str) -> str:
     """
     response = await litellm.acompletion(
         messages=[{"role": "system", "content": prompt}],
-        model="gpt-4.1",
-        temperature=0.7,
+        **llm_config,
     )
     compute_cost(response)
     user_prompt = response.choices[0].message.content
